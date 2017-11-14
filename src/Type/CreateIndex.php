@@ -13,7 +13,7 @@ declare(strict_types=1);
 namespace Prooph\EventStore\ArangoDb\Type;
 
 use ArangoDBClient\HttpHelper;
-use ArangoDBClient\HttpResponse;
+use ArangoDb\Response;
 use ArangoDBClient\Urls;
 
 class CreateIndex implements Type
@@ -44,7 +44,7 @@ class CreateIndex implements Type
     ) {
         $this->collectionName = $collectionName;
         $this->options = $options;
-        $this->inspector = $inspector ?: function (HttpResponse $response, string $rId = null) {
+        $this->inspector = $inspector ?: function (Response $response, string $rId = null) {
             if ($rId) {
                 return null;
             }
@@ -71,7 +71,7 @@ class CreateIndex implements Type
      * @see https://docs.arangodb.com/3.2/Manual/Indexing/WorkingWithIndexes.html#creating-an-index
      *
      * @param string $collectionName
-     * @param callable $inspector Inspects result, signature is (HttpResponse $response, string $rId = null)
+     * @param callable $inspector Inspects result, signature is (Response $response, string $rId = null)
      * @param array $options
      * @return CreateIndex
      */
@@ -83,7 +83,7 @@ class CreateIndex implements Type
         return new self($collectionName, $options, $inspector);
     }
 
-    public function checkResponse(HttpResponse $response, string $rId = null): ?int
+    public function checkResponse(Response $response, string $rId = null): ?int
     {
         return ($this->inspector)($response, $rId);
     }

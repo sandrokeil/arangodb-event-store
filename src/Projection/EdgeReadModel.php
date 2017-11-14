@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Prooph\EventStore\ArangoDb\Projection;
 
 use ArangoDBClient\Collection;
-use ArangoDBClient\Connection;
+use ArangoDb\Connection;
 use function Prooph\EventStore\ArangoDb\Fn\execute;
 use Prooph\EventStore\ArangoDb\Type\CreateCollection;
 use Prooph\EventStore\ArangoDb\Type\DeleteCollection;

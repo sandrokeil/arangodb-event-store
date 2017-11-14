@@ -13,7 +13,7 @@ declare(strict_types=1);
 namespace Prooph\EventStore\ArangoDb\Type;
 
 use ArangoDBClient\HttpHelper;
-use ArangoDBClient\HttpResponse;
+use ArangoDb\Response;
 use ArangoDBClient\Urls;
 
 final class QueryByExample implements Type, HasResponse
@@ -53,7 +53,7 @@ final class QueryByExample implements Type, HasResponse
         $this->collectionName = $collectionName;
         $this->example = $example;
         $this->options = $options;
-        $this->inspector = $inspector ?: function (HttpResponse $response, string $rId = null) {
+        $this->inspector = $inspector ?: function (Response $response, string $rId = null) {
             return null;
         };
     }
@@ -78,7 +78,7 @@ final class QueryByExample implements Type, HasResponse
      *
      * @param string $collectionName
      * @param array $example
-     * @param callable $inspector Inspects result, signature is (HttpResponse $response, string $rId = null)
+     * @param callable $inspector Inspects result, signature is (Response $response, string $rId = null)
      * @param array $options
      * @return QueryByExample
      */
@@ -91,7 +91,7 @@ final class QueryByExample implements Type, HasResponse
         return new self($collectionName, $example, $options, $inspector);
     }
 
-    public function checkResponse(HttpResponse $response, string $rId = null): ?int
+    public function checkResponse(Response $response, string $rId = null): ?int
     {
         $this->result = $response->getBody();
 

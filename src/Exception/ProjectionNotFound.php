@@ -12,22 +12,22 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Exception;
 
-use ArangoDBClient\HttpResponse;
+use ArangoDb\Response;
 use Prooph\EventStore\Exception\ProjectionNotFound as ProophProjectionNotFound;
 
 class ProjectionNotFound extends ProophProjectionNotFound
 {
     /**
-     * @var HttpResponse
+     * @var Response
      */
     private $response;
 
-    public function response(): ?HttpResponse
+    public function response(): ?Response
     {
         return $this->response;
     }
 
-    public static function with(string $name, ?HttpResponse $response): ProjectionNotFound
+    public static function with(string $name, ?Response $response): ProjectionNotFound
     {
         $self = new self('A projection with name "' . $name . '" could not be found.');
         $self->response = $response;

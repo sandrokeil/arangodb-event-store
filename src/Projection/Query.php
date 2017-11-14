@@ -12,8 +12,9 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Projection;
 
-use ArangoDBClient\Connection;
-use ArangoDBClient\Cursor;
+use ArangoDb\Connection;
+use ArangoDb\Cursor;
+use ArangoDb\Vpack;
 use ArangoDBClient\Statement;
 use Closure;
 use Iterator;
@@ -359,18 +360,27 @@ RETURN {
     "real_stream_name": c.real_stream_name
 }
 EOF;
-            $statement = new Statement(
-                $this->connection, [
-                    Statement::ENTRY_QUERY => $aql,
-                    Statement::ENTRY_BINDVARS => [
-                        '@collection' => $this->eventStreamsTable,
-                    ],
-                    Cursor::ENTRY_FLAT => true,
+
+            $cursor = $this->connection->query(
+                Vpack::fromJson(json_encode(
+                    [
+                        Statement::ENTRY_QUERY => $aql,
+                        Statement::ENTRY_BINDVARS => [
+                            '@collection' => $this->eventStreamsTable,
+                        ],
+                        Statement::ENTRY_BATCHSIZE => 1000,
+                    ]
+                )),
+                [
+                    Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
                 ]
             );
 
-            foreach ($statement->execute() as $streamName) {
-                $streamPositions[$streamName['real_stream_name']] = 0;
+            $cursor->rewind();
+
+            while ($cursor->valid()) {
+                $streamPositions[$cursor->current()['real_stream_name']] = 0;
+                $cursor->next();
             }
 
             $this->streamPositions = array_merge($streamPositions, $this->streamPositions);
@@ -387,20 +397,27 @@ RETURN {
 }
 EOF;
 
-            $statement = new Statement(
-                $this->connection,
-                [
-                    Statement::ENTRY_QUERY => $aql,
-                    Statement::ENTRY_BINDVARS => [
+            $cursor = $this->connection->query(
+                Vpack::fromJson(json_encode(
+                    [
+                        Statement::ENTRY_QUERY => $aql,
+                        Statement::ENTRY_BINDVARS => [
                             '@collection' => $this->eventStreamsTable,
                             'categories' => $this->query['categories'],
                         ],
-                    Cursor::ENTRY_FLAT => true,
+                        Statement::ENTRY_BATCHSIZE => 1000,
+                    ]
+                )),
+                [
+                    Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
                 ]
             );
 
-            foreach ($statement->execute() as $streamName) {
-                $streamPositions[$streamName['real_stream_name']] = 0;
+            $cursor->rewind();
+
+            while ($cursor->valid()) {
+                $streamPositions[$cursor->current()['real_stream_name']] = 0;
+                $cursor->next();
             }
 
             $this->streamPositions = array_merge($streamPositions, $this->streamPositions);

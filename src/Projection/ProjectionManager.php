@@ -12,8 +12,9 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Projection;
 
-use ArangoDBClient\Connection;
-use ArangoDBClient\Cursor;
+use ArangoDb\Connection;
+use ArangoDb\Cursor;
+use ArangoDb\Vpack;
 use ArangoDBClient\Statement;
 use Prooph\EventStore\ArangoDb\EventStore as ArangoDbEventStore;
 use Prooph\EventStore\ArangoDb\Exception;
@@ -230,29 +231,36 @@ RETURN {
     "name": c._key
 }
 EOF;
-        $statement = new Statement(
-            $this->connection, [
-                Statement::ENTRY_QUERY => str_replace('%filter%', $filter, $aql),
-                Statement::ENTRY_BINDVARS => array_merge(
-                    [
-                        '@collection' => $this->projectionsTable,
-                        'offset' => $offset,
-                        'limit' => $limit,
-                    ],
-                    $values
-                ),
-                Cursor::ENTRY_FLAT => true,
+        $cursor = $this->connection->query(
+            Vpack::fromJson(json_encode(
+                [
+                    Statement::ENTRY_QUERY => str_replace('%filter%', $filter, $aql),
+                    Statement::ENTRY_BINDVARS => array_merge(
+                        [
+                            '@collection' => $this->projectionsTable,
+                            'offset' => $offset,
+                            'limit' => $limit,
+                        ],
+                        $values
+                    ),
+                    Statement::ENTRY_BATCHSIZE => 1000,
+                ]
+            )),
+            [
+                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
             ]
         );
 
         $projectionNames = [];
 
         try {
-            foreach ($statement->execute() as $projectionName) {
-                $projectionNames[] = $projectionName['name'];
+            $cursor->rewind();
+            while ($cursor->valid()) {
+                $projectionNames[] = $cursor->current()['name'];
+                $cursor->next();
             }
-        } catch (\ArangoDBClient\ServerException $e) {
-            if ($e->getCode() === 404) {
+        } catch (\Throwable $e) {
+            if ($cursor->getResponse()->getHttpCode() === 404) {
                 throw Exception\RuntimeException::fromServerException($e);
             }
             throw $e;

@@ -12,15 +12,16 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb;
 
-use ArangoDBClient\Connection;
-use ArangoDBClient\Cursor;
+use ArangoDb\Connection;
+use ArangoDb\Cursor;
+use ArangoDb\Vpack;
 use ArangoDBClient\Statement;
+use ArangoDBClient\Urls;
 use Assert\Assertion;
 use Iterator;
 use Prooph\Common\Messaging\MessageFactory;
 use Prooph\EventStore\ArangoDb\Type\DeleteCollection;
 use Prooph\EventStore\ArangoDb\Type\DeleteDocumentByExample;
-use Prooph\EventStore\ArangoDb\Type\InsertDocument;
 use Prooph\EventStore\ArangoDb\Type\UpdateDocumentByExample;
 use Prooph\EventStore\EventStore as ProophEventStore;
 use Prooph\EventStore\Exception\StreamExistsAlready;
@@ -112,35 +113,47 @@ final class EventStore implements ProophEventStore
             ...$this->persistenceStrategy->createCollection($collectionName)
         );
 
-        executeInTransaction(
-            $this->connection,
-            [
-                [
-                    409 => [StreamExistsAlready::class, $stream->streamName()],
+        $actions = 'var rId0 = db.' . $this->eventStreamsCollection
+            . '.insert(' . json_encode([$this->createEventStreamData($stream)])
+            . ', {"silent":true});';
+        $actions .= 'var rId1 = db.' . $collectionName
+            . '.insert(' . $this->persistenceStrategy->jsonIterator($stream->streamEvents())->asJson()
+            . ', {"silent":true});';
+
+        $this->connection->post(
+            Urls::URL_TRANSACTION,
+            Vpack::fromJson(
+                json_encode(
                     [
-                        \Prooph\EventStore\ArangoDb\Exception\RuntimeException::class,
-                        'Could not insert streams for "' . $stream->streamName()->toString() . '"',
-                    ],
-                ],
-            ],
-            InsertDocument::with($this->eventStreamsCollection, [$this->createEventStreamData($stream)]),
-            InsertDocument::with($collectionName, $this->persistenceStrategy->jsonIterator($stream->streamEvents()))
-        );
+                        'collections' => [
+                            'write' => [$this->eventStreamsCollection, $collectionName],
+                        ],
+                        'action' => "function () {var db = require('@arangodb').db;" . $actions . 'return {rId0,rId1}}',
+                    ]
+                )
+        ));
     }
 
     public function appendTo(StreamName $streamName, Iterator $streamEvents): void
     {
         $collectionName = $this->persistenceStrategy->generateCollectionName($streamName);
 
-        executeInTransaction(
-            $this->connection,
-            [
-                [
-                    404 => [StreamNotFound::class, $streamName],
-                ],
-            ],
-            InsertDocument::with($collectionName, $this->persistenceStrategy->jsonIterator($streamEvents))
-        );
+        $actions = 'var rId0 = db.' . $collectionName
+            . '.insert(' . $this->persistenceStrategy->jsonIterator($streamEvents)->asJson()
+            . ', {"silent":true});';
+
+        $this->connection->post(
+            Urls::URL_TRANSACTION,
+            Vpack::fromJson(
+                json_encode(
+                    [
+                        'collections' => [
+                            'write' => [$collectionName],
+                        ],
+                        'action' => "function () {var db = require('@arangodb').db;" . $actions . 'return {rId0}}',
+                    ]
+                )
+            ));
     }
 
     public function delete(StreamName $streamName): void
@@ -221,32 +234,37 @@ RETURN {
 EOF;
         $collectionName = $this->persistenceStrategy->generateCollectionName($streamName);
 
-        $statement = new Statement(
-            $this->connection, [
-                Statement::ENTRY_QUERY => str_replace(
-                    ['%DIR%', '%op%', '%filter%'],
-                    [$dir, $dir === self::SORT_ASC ? '>=' : '<=', $filter],
-                    $aql
-                ),
-                Statement::ENTRY_BINDVARS => array_merge(
-                    [
-                        '@collection' => $collectionName,
-                        'from' => (string) $fromNumber,
-                        'limit' => $limit,
-                    ],
-                    $values),
-                Cursor::ENTRY_FLAT => true,
+        $cursor = $this->connection->query(
+            Vpack::fromJson(json_encode(
+                [
+                    Statement::ENTRY_QUERY => str_replace(
+                        ['%DIR%', '%op%', '%filter%'],
+                        [$dir, $dir === self::SORT_ASC ? '>=' : '<=', $filter],
+                        $aql
+                    ),
+                    Statement::ENTRY_BINDVARS => array_merge(
+                        [
+                            '@collection' => $collectionName,
+                            'from' => (string)$fromNumber,
+                            'limit' => $limit,
+                        ],
+                        $values),
+                    Statement::ENTRY_BATCHSIZE => 1000,
+                ]
+            )),
+            [
+                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_JSON,
             ]
         );
 
         try {
             return new StreamIterator(
-                $statement->execute(),
+                $cursor,
                 $this->persistenceStrategy->offsetNumber(),
                 $this->messageFactory
             );
-        } catch (\ArangoDBClient\ServerException $e) {
-            if ($e->getCode() === 404) {
+        } catch (\Throwable $e) {
+            if ($cursor->getResponse()->getHttpCode() === 404) {
                 throw StreamNotFound::with($streamName);
             }
             throw $e;
@@ -306,25 +324,33 @@ RETURN {
     "real_stream_name": c.real_stream_name
 }
 EOF;
-        $statement = new Statement(
-            $this->connection, [
-                Statement::ENTRY_QUERY => str_replace('%filter%', $filter, $aql),
-                Statement::ENTRY_BINDVARS => array_merge(
-                    [
-                        '@collection' => $this->eventStreamsCollection,
-                        'offset' => $offset,
-                        'limit' => $limit,
-                    ],
-                    $values
-                ),
-                Cursor::ENTRY_FLAT => true,
+
+        $cursor = $this->connection->query(
+            Vpack::fromJson(json_encode(
+                [
+                    Statement::ENTRY_QUERY => str_replace('%filter%', $filter, $aql),
+                    Statement::ENTRY_BINDVARS => array_merge(
+                        [
+                            '@collection' => $this->eventStreamsCollection,
+                            'offset' => $offset,
+                            'limit' => $limit,
+                        ],
+                        $values
+                    ),
+                    Statement::ENTRY_BATCHSIZE => 1000,
+                ]
+            )),
+            [
+                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
             ]
         );
 
         $streamNames = [];
+        $cursor->rewind();
 
-        foreach ($statement->execute() as $streamName) {
-            $streamNames[] = new StreamName($streamName['real_stream_name']);
+        while ($cursor->valid()) {
+            $streamNames[] = new StreamName($cursor->current()['real_stream_name']);
+            $cursor->next();
         }
 
         return $streamNames;
@@ -377,25 +403,32 @@ RETURN {
     "category": category
 }
 EOF;
-        $statement = new Statement(
-            $this->connection, [
-                Statement::ENTRY_QUERY => str_replace('%filter%', $filter, $aql),
-                Statement::ENTRY_BINDVARS => array_merge(
-                    [
-                        '@collection' => $this->eventStreamsCollection,
-                        'offset' => $offset,
-                        'limit' => $limit,
-                    ],
-                    $values
-                ),
-                Cursor::ENTRY_FLAT => true,
-            ]
-        );
-
         $categories = [];
 
-        foreach ($statement->execute() as $data) {
-            $categories[] = $data['category'];
+        $cursor = $this->connection->query(
+            Vpack::fromJson(json_encode(
+                [
+                    Statement::ENTRY_QUERY => str_replace('%filter%', $filter, $aql),
+                    Statement::ENTRY_BINDVARS => array_merge(
+                        [
+                            '@collection' => $this->eventStreamsCollection,
+                            'offset' => $offset,
+                            'limit' => $limit,
+                        ],
+                        $values
+                    ),
+                    Statement::ENTRY_BATCHSIZE => 1000,
+                ]
+            )),
+            [
+                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
+            ]
+        );
+        $cursor->rewind();
+
+        while ($cursor->valid()) {
+            $categories[] = new StreamName($cursor->current()['category']);
+            $cursor->next();
         }
 
         return $categories;
@@ -411,19 +444,22 @@ FOR c IN @@collection
     }
 EOF;
 
-        $statement = new Statement(
-            $this->connection, [
-                Statement::ENTRY_QUERY => $aql,
-                Statement::ENTRY_BINDVARS => [
-                    '@collection' => $this->eventStreamsCollection,
-                    'real_stream_name' => $streamName->toString(),
-                ],
-                Cursor::ENTRY_FLAT => true,
+        $cursor = $this->connection->query(
+            Vpack::fromJson(json_encode(
+                [
+                    Statement::ENTRY_QUERY => $aql,
+                    Statement::ENTRY_BINDVARS => [
+                        '@collection' => $this->eventStreamsCollection,
+                        'real_stream_name' => $streamName->toString(),
+                    ],
+                ]
+            )),
+            [
+                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
             ]
         );
 
-        $cursor = $statement->execute();
-
+        $cursor->rewind();
         if (false === $cursor->valid() || ($stream = $cursor->current()) === null) {
             throw StreamNotFound::with($streamName);
         }
@@ -442,18 +478,21 @@ FOR c IN @@collection
     }
 EOF;
 
-        $statement = new Statement(
-            $this->connection, [
-                Statement::ENTRY_QUERY => $aql,
-                Statement::ENTRY_BINDVARS => [
-                    '@collection' => $this->eventStreamsCollection,
-                    'real_stream_name' => $streamName->toString(),
-                ],
-                Cursor::ENTRY_FLAT => true,
+        $cursor = $this->connection->query(
+            Vpack::fromJson(json_encode(
+                [
+                    Statement::ENTRY_QUERY => $aql,
+                    Statement::ENTRY_BINDVARS => [
+                        '@collection' => $this->eventStreamsCollection,
+                        'real_stream_name' => $streamName->toString(),
+                    ],
+                ]
+            )),
+            [
+                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
             ]
         );
-
-        $cursor = $statement->execute();
+        $cursor->rewind();
 
         return 1 === ($cursor->current()['number'] ?? 0);
     }

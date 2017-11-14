@@ -13,7 +13,7 @@ declare(strict_types=1);
 namespace Prooph\EventStore\ArangoDb\Type;
 
 use ArangoDBClient\HttpHelper;
-use ArangoDBClient\HttpResponse;
+use ArangoDb\Response;
 use ArangoDBClient\Urls;
 
 final class UpdateDocument implements Type
@@ -58,7 +58,7 @@ final class UpdateDocument implements Type
         $this->data = $data;
         $this->id = $id;
         $this->options = $options;
-        $this->inspector = $inspector ?: function (HttpResponse $response, string $rId = null) {
+        $this->inspector = $inspector ?: function (Response $response, string $rId = null) {
             if ($rId) {
                 return null;
             }
@@ -89,7 +89,7 @@ final class UpdateDocument implements Type
      *
      * @param string $collectionName
      * @param string $id
-     * @param callable $inspector Inspects result, signature is (HttpResponse $response, string $rId = null)
+     * @param callable $inspector Inspects result, signature is (Response $response, string $rId = null)
      * @param array $options
      * @return UpdateDocument
      */
@@ -102,7 +102,7 @@ final class UpdateDocument implements Type
         return new self($collectionName, $id, $options, $inspector);
     }
 
-    public function checkResponse(HttpResponse $response, string $rId = null): ?int
+    public function checkResponse(Response $response, string $rId = null): ?int
     {
         return ($this->inspector)($response, $rId);
     }

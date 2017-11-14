@@ -12,7 +12,7 @@ declare(strict_types=1);
 
 namespace ProophTest\EventStore\ArangoDb;
 
-use ArangoDBClient\Connection;
+use ArangoDb\Connection;
 use ArrayIterator;
 use Prooph\Common\Messaging\FQCNMessageFactory;
 use Prooph\EventStore\ArangoDb\EventStore;
@@ -86,7 +86,6 @@ abstract class AbstractEventStoreTest extends BaseTestCase
         $metadataMatcher = $metadataMatcher->withMetadataMatch('event_name', Operator::REGEX(), '.+UserCreated$', FieldType::MESSAGE_PROPERTY());
 
         $streamEvents = $this->eventStore->load($stream->streamName(), 1, null, $metadataMatcher);
-
         $this->assertCount(1, $streamEvents);
     }
 

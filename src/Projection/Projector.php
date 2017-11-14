@@ -12,8 +12,9 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Projection;
 
-use ArangoDBClient\Connection;
-use ArangoDBClient\Cursor;
+use ArangoDb\Connection;
+use ArangoDb\Cursor;
+use ArangoDb\Vpack;
 use ArangoDBClient\Statement;
 use ArrayIterator;
 use Closure;
@@ -755,28 +756,32 @@ IN @@collection
 RETURN NEW
 EOF;
 
-        $statement = new Statement(
-            $this->connection, [
-                Statement::ENTRY_QUERY => $aql,
-                Statement::ENTRY_BINDVARS => [
-                    '@collection' => $this->projectionsTable,
-                    'name' => $this->name,
-                    'lockedUntil' => $lockUntilString,
-                    'nowString' => $nowString,
-                    'status' => ProjectionStatus::RUNNING()->getValue(),
-                ],
-                Cursor::ENTRY_FLAT => true,
+        $cursor = $this->connection->query(
+            Vpack::fromJson(json_encode(
+                [
+                    Statement::ENTRY_QUERY => $aql,
+                    Statement::ENTRY_BINDVARS => [
+                        '@collection' => $this->projectionsTable,
+                        'name' => $this->name,
+                        'lockedUntil' => $lockUntilString,
+                        'nowString' => $nowString,
+                        'status' => ProjectionStatus::RUNNING()->getValue(),
+                    ],
+                    Statement::ENTRY_BATCHSIZE => 1000,
+                ]
+            )),
+            [
+                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
             ]
         );
 
         try {
-            $result = $statement->execute();
-
-            if ($result->getCount() === 0) {
+            $cursor->rewind();
+            if ($cursor->count() === 0) {
                 throw new Exception\RuntimeException('Another projection process is already running');
             }
-        } catch (\ArangoDBClient\ServerException $e) {
-            if ($e->getCode() === 404) {
+        } catch (\Throwable $e) {
+            if ($cursor->getResponse()->getHttpCode() === 404) {
                 throw RuntimeException::fromServerException($e);
             }
             throw $e;
@@ -875,18 +880,27 @@ RETURN {
     "real_stream_name": c.real_stream_name
 }
 EOF;
-            $statement = new Statement(
-                $this->connection, [
-                    Statement::ENTRY_QUERY => $aql,
-                    Statement::ENTRY_BINDVARS => [
-                        '@collection' => $this->eventStreamsTable,
-                    ],
-                    Cursor::ENTRY_FLAT => true,
+
+            $cursor = $this->connection->query(
+                Vpack::fromJson(json_encode(
+                    [
+                        Statement::ENTRY_QUERY => $aql,
+                        Statement::ENTRY_BINDVARS => [
+                            '@collection' => $this->eventStreamsTable,
+                        ],
+                        Statement::ENTRY_BATCHSIZE => 1000,
+                    ]
+                )),
+                [
+                    Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
                 ]
             );
 
-            foreach ($statement->execute() as $streamName) {
-                $streamPositions[$streamName['real_stream_name']] = 0;
+            $cursor->rewind();
+
+            while ($cursor->valid()) {
+                $streamPositions[$cursor->current()['real_stream_name']] = 0;
+                $cursor->next();
             }
 
             $this->streamPositions = array_merge($streamPositions, $this->streamPositions);
@@ -902,19 +916,27 @@ RETURN {
     "real_stream_name": c.real_stream_name
 }
 EOF;
-            $statement = new Statement(
-                $this->connection, [
-                    Statement::ENTRY_QUERY => $aql,
-                    Statement::ENTRY_BINDVARS => [
-                        '@collection' => $this->eventStreamsTable,
-                        'categories' => $this->query['categories'],
-                    ],
-                    Cursor::ENTRY_FLAT => true,
+            $cursor = $this->connection->query(
+                Vpack::fromJson(json_encode(
+                    [
+                        Statement::ENTRY_QUERY => $aql,
+                        Statement::ENTRY_BINDVARS => [
+                            '@collection' => $this->eventStreamsTable,
+                            'categories' => $this->query['categories'],
+                        ],
+                        Statement::ENTRY_BATCHSIZE => 1000,
+                    ]
+                )),
+                [
+                    Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
                 ]
             );
 
-            foreach ($statement->execute() as $streamName) {
-                $streamPositions[$streamName['real_stream_name']] = 0;
+            $cursor->rewind();
+
+            while ($cursor->valid()) {
+                $streamPositions[$cursor->current()['real_stream_name']] = 0;
+                $cursor->next();
             }
 
             $this->streamPositions = array_merge($streamPositions, $this->streamPositions);

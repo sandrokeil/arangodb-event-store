@@ -12,14 +12,15 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Fn;
 
-use ArangoDBClient\Batch;
-use ArangoDBClient\BatchPart;
-use ArangoDBClient\Connection;
-use ArangoDBClient\HttpResponse;
 use ArangoDBClient\Urls;
 use Prooph\EventStore\ArangoDb\Exception\RuntimeException;
 use Prooph\EventStore\ArangoDb\Type;
 use Prooph\EventStore\ArangoDb\Type\InsertDocument;
+
+use ArangoDb\Connection;
+use ArangoDb\Response;
+use ArangoDb\Request;
+use ArangoDb\Vpack;
 
 function executeInTransaction(Connection $connection, ?array $onError, Type\Type ...$batches): void
 {
@@ -36,17 +37,19 @@ function executeInTransaction(Connection $connection, ?array $onError, Type\Type
     try {
         $response = $connection->post(
             Urls::URL_TRANSACTION,
-            json_encode(
-                [
-                    'collections' => [
-                        'write' => array_unique($collections),
-                    ],
-                    'action' => sprintf("function () {var db = require('@arangodb').db;%s return {%s}}", $actions,
-                        implode(',', $return)),
-                ]
+            Vpack::fromJson(
+                json_encode(
+                    [
+                        'collections' => [
+                            'write' => array_unique($collections),
+                        ],
+                        'action' => sprintf("function () {var db = require('@arangodb').db;%s return {%s}}", $actions,
+                            implode(',', $return)),
+                    ]
+                )
             )
         );
-    } catch (\ArangoDBClient\ServerException | \ArangoDBClient\Exception $e) {
+    } catch (\Throwable $e) {
         $error = $e->getCode();
         if (isset($onError[0][$error]) && method_exists($onError[0][$error][0], 'with')) {
             $args = array_slice($onError[0][$error], 1);
@@ -63,31 +66,42 @@ function executeInTransaction(Connection $connection, ?array $onError, Type\Type
 
 function execute(Connection $connection, ?array $onError, Type\Type ...$batches): void
 {
-    $batchSize = count($batches);
-    $batch = new Batch($connection, ['batchSize' => $batchSize, 'startCapture' => false]);
-
-    foreach ($batches as $type) {
+    // TODO make it async
+    foreach ($batches as $key => $type) {
         if ($type instanceof InsertDocument) {
-            $batch->getBatchParts()->setSize($batchSize + $type->count() - 1);
             foreach ($type->toHttp() as $item) {
-                $batch->append(...$item);
+                $response = $connection->{$item[0]}(
+                    $item[1],
+                    Vpack::fromJson(
+                        json_encode(
+                            $item[2]
+                        )
+                    ),
+                    $item[3]
+                );
+                checkResponse($response, $onError[$key] ?? null, $type);
             }
             continue;
         }
-        $batch->append(...$type->toHttp());
-    }
+        $item = $type->toHttp();
 
-    /* @var $batchPart BatchPart */
-    foreach ($batch->process()->getBatchParts() as $key => $batchPart) {
-        checkResponse($batchPart->getResponse(), $onError[$key] ?? null, $batches[$key]);
+        $response = $connection->{$item[0]}(
+            $item[1],
+            Vpack::fromJson(
+                json_encode(
+                    $item[2]
+                )
+            ),
+            $item[3]
+        );
+        checkResponse($response, $onError[$key] ?? null, $type);
     }
 }
 
-function checkResponse(HttpResponse $response, ?array $onError, Type\Type $type, string $rId = null): void
+function checkResponse(Response $response, ?array $onError, Type\Type $type, string $rId = null): void
 {
-    /* @var $response HttpResponse */
-
     $httpCode = $response->getHttpCode();
+
     if ($httpCode < 200 || $httpCode > 300) {
         $error = $httpCode;
     } else {
@@ -100,16 +114,17 @@ function checkResponse(HttpResponse $response, ?array $onError, Type\Type $type,
             $args[] = $response;
             throw call_user_func_array($onError[$error][0] . '::with', $args);
         }
-        throw RuntimeException::fromErrorResponse($response->getBody());
+        throw RuntimeException::fromErrorResponse($response->getBody(), $type);
     }
 }
 
-function eventStreamsBatch(Connection $connection): Batch
+/**
+ * @return Type\Type[]
+ */
+function eventStreamsBatch(): array
 {
-    $batch = new Batch($connection, ['batchSize' => 3, 'startCapture' => false]);
-
-    $batch->append(
-        ...Type\CreateCollection::with(
+    return [
+        Type\CreateCollection::with(
             'event_streams',
             [
                 'keyOptions' => [
@@ -119,11 +134,8 @@ function eventStreamsBatch(Connection $connection): Batch
                     'offset' => 1,
                 ],
             ]
-        )->toHttp()
-    );
-
-    $batch->append(
-        ...Type\CreateIndex::with(
+        ),
+        Type\CreateIndex::with(
             'event_streams',
             [
                 'type' => 'hash',
@@ -134,11 +146,8 @@ function eventStreamsBatch(Connection $connection): Batch
                 'unique' => true,
                 'sparse' => false,
             ]
-        )->toHttp()
-    );
-
-    $batch->append(
-        ...Type\CreateIndex::with(
+        ),
+        Type\CreateIndex::with(
             'event_streams',
             [
                 'type' => 'skiplist',
@@ -149,30 +158,25 @@ function eventStreamsBatch(Connection $connection): Batch
                 'unique' => false,
                 'sparse' => false,
             ]
-        )->toHttp()
-    );
-
-    return $batch;
+        ),
+    ];
 }
 
-function projectionsBatch(Connection $connection): Batch
+/**
+ * @return Type\Type[]
+ */
+function projectionsBatch(): array
 {
-    $batch = new Batch($connection, ['batchSize' => 2, 'startCapture' => false]);
-
-    $batch->append(
-        ...Type\CreateCollection::with(
+    return [
+        Type\CreateCollection::with(
             'projections',
             [
                 'keyOptions' => [
                     'allowUserKeys' => true,
                     'type' => 'traditional',
                 ],
-            ]
-        )->toHttp()
-    );
-
-    $batch->append(
-        ...Type\CreateIndex::with(
+            ]),
+        Type\CreateIndex::with(
             'projections',
             [
                 'type' => 'skiplist',
@@ -183,8 +187,6 @@ function projectionsBatch(Connection $connection): Batch
                 'unique' => true,
                 'sparse' => false,
             ]
-        )->toHttp()
-    );
-
-    return $batch;
+        ),
+    ];
 }

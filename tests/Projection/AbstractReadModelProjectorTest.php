@@ -12,7 +12,7 @@ declare(strict_types=1);
 
 namespace ProophTest\EventStore\ArangoDb\Projection;
 
-use ArangoDBClient\Connection;
+use ArangoDb\Connection;
 use ArrayIterator;
 use Prooph\Common\Messaging\FQCNMessageFactory;
 use Prooph\Common\Messaging\Message;

@@ -13,7 +13,7 @@ declare(strict_types=1);
 namespace Prooph\EventStore\ArangoDb\Type;
 
 use ArangoDBClient\HttpHelper;
-use ArangoDBClient\HttpResponse;
+use ArangoDb\Response;
 use ArangoDBClient\Urls;
 
 final class ReadCollection implements Type, HasResponse
@@ -42,7 +42,7 @@ final class ReadCollection implements Type, HasResponse
         callable $inspector = null
     ) {
         $this->collectionName = $collectionName;
-        $this->inspector = $inspector ?: function (HttpResponse $response, string $rId = null) {
+        $this->inspector = $inspector ?: function (Response $response, string $rId = null) {
             return null;
         };
     }
@@ -65,7 +65,7 @@ final class ReadCollection implements Type, HasResponse
      * @see https://docs.arangodb.com/3.2/Manual/DataModeling/Collections/#collection
      *
      * @param string $collectionName
-     * @param callable $inspector Inspects result, signature is (HttpResponse $response, string $rId = null)
+     * @param callable $inspector Inspects result, signature is (Response $response, string $rId = null)
      * @param array $options
      * @return ReadCollection
      */
@@ -77,7 +77,7 @@ final class ReadCollection implements Type, HasResponse
         return new self($collectionName, $options, $inspector);
     }
 
-    public function checkResponse(HttpResponse $response, string $rId = null): ?int
+    public function checkResponse(Response $response, string $rId = null): ?int
     {
         $this->result = $response->getBody();
 

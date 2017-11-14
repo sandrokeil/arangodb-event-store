@@ -12,8 +12,9 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Projection;
 
-use ArangoDBClient\Connection;
-use ArangoDBClient\Cursor;
+use ArangoDb\Connection;
+use ArangoDb\Cursor;
+use ArangoDb\Vpack;
 use ArangoDBClient\Statement;
 use Closure;
 use DateTimeImmutable;
@@ -152,7 +153,7 @@ final class ReadModelProjector implements ProophReadModelProjector
         int $sleep,
         bool $triggerPcntlSignalDispatch = false
     ) {
-        if ($triggerPcntlSignalDispatch && ! extension_loaded('pcntl')) {
+        if ($triggerPcntlSignalDispatch && !extension_loaded('pcntl')) {
             throw Exception\ExtensionNotLoadedException::withName('pcntl');
         }
 
@@ -172,7 +173,7 @@ final class ReadModelProjector implements ProophReadModelProjector
             $eventStore = $eventStore->getInnerEventStore();
         }
 
-        if (! $eventStore instanceof ArangoDbEventStore
+        if (!$eventStore instanceof ArangoDbEventStore
         ) {
             throw new Exception\InvalidArgumentException('Unknown event store instance given');
         }
@@ -258,16 +259,16 @@ final class ReadModelProjector implements ProophReadModelProjector
 
     public function when(array $handlers): ProophReadModelProjector
     {
-        if (null !== $this->handler || ! empty($this->handlers)) {
+        if (null !== $this->handler || !empty($this->handlers)) {
             throw new Exception\RuntimeException('When was already called');
         }
 
         foreach ($handlers as $eventName => $handler) {
-            if (! is_string($eventName)) {
+            if (!is_string($eventName)) {
                 throw new Exception\InvalidArgumentException('Invalid event name given, string expected');
             }
 
-            if (! $handler instanceof Closure) {
+            if (!$handler instanceof Closure) {
                 throw new Exception\InvalidArgumentException('Invalid handler given, Closure expected');
             }
 
@@ -280,7 +281,7 @@ final class ReadModelProjector implements ProophReadModelProjector
 
     public function whenAny(Closure $handler): ProophReadModelProjector
     {
-        if (null !== $this->handler || ! empty($this->handlers)) {
+        if (null !== $this->handler || !empty($this->handlers)) {
             throw new Exception\RuntimeException('When was already called');
         }
 
@@ -441,7 +442,7 @@ final class ReadModelProjector implements ProophReadModelProjector
         $this->createProjection();
         $this->acquireLock();
 
-        if (! $this->readModel->isInitialized()) {
+        if (!$this->readModel->isInitialized()) {
             $this->readModel->init();
         }
 
@@ -504,7 +505,7 @@ final class ReadModelProjector implements ProophReadModelProjector
                 }
 
                 $this->prepareStreamPositions();
-            } while ($keepRunning && ! $this->isStopped);
+            } while ($keepRunning && !$this->isStopped);
         } catch (ProjectionAlreadyExistsException $projectionAlreadyExistsException) {
             // throw it in finally
         } finally {
@@ -577,7 +578,7 @@ final class ReadModelProjector implements ProophReadModelProjector
             /* @var Message $event */
             $this->streamPositions[$streamName]++;
 
-            if (! isset($this->handlers[$event->messageName()])) {
+            if (!isset($this->handlers[$event->messageName()])) {
                 continue;
             }
 
@@ -603,7 +604,8 @@ final class ReadModelProjector implements ProophReadModelProjector
 
     private function createHandlerContext(?string &$streamName)
     {
-        return new class($this, $streamName) {
+        return new class($this, $streamName)
+        {
             /**
              * @var ReadModelProjector
              */
@@ -661,7 +663,7 @@ final class ReadModelProjector implements ProophReadModelProjector
             $this->streamPositions = array_merge($this->streamPositions, $result['position']);
             $state = $result['state'];
 
-            if (! empty($state)) {
+            if (!empty($state)) {
                 $this->state = $state;
             }
         }
@@ -684,8 +686,8 @@ final class ReadModelProjector implements ProophReadModelProjector
                     [
                         [
                             '_key' => $this->name,
-                            'position' => (object) null,
-                            'state' => (object) null,
+                            'position' => (object)null,
+                            'state' => (object)null,
                             'status' => $this->status->getValue(),
                             'locked_until' => null,
                         ],
@@ -716,28 +718,32 @@ IN @@collection
 RETURN NEW
 EOF;
 
-        $statement = new Statement(
-            $this->connection, [
-                Statement::ENTRY_QUERY => $aql,
-                Statement::ENTRY_BINDVARS => [
-                    '@collection' => $this->projectionsTable,
-                    'name' => $this->name,
-                    'lockedUntil' => $lockUntilString,
-                    'nowString' => $nowString,
-                    'status' => ProjectionStatus::RUNNING()->getValue(),
-                ],
-                Cursor::ENTRY_FLAT => true,
+        $cursor = $this->connection->query(
+            Vpack::fromJson(json_encode(
+                [
+                    Statement::ENTRY_QUERY => $aql,
+                    Statement::ENTRY_BINDVARS => [
+                        '@collection' => $this->projectionsTable,
+                        'name' => $this->name,
+                        'lockedUntil' => $lockUntilString,
+                        'nowString' => $nowString,
+                        'status' => ProjectionStatus::RUNNING()->getValue(),
+                    ],
+                    Statement::ENTRY_BATCHSIZE => 1000,
+                ]
+            )),
+            [
+                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
             ]
         );
 
         try {
-            $result = $statement->execute();
-
-            if ($result->getCount() === 0) {
+            $cursor->rewind();
+            if ($cursor->count() === 0) {
                 throw new Exception\RuntimeException('Another projection process is already running');
             }
-        } catch (\ArangoDBClient\ServerException $e) {
-            if ($e->getCode() === 404) {
+        } catch (\Throwable $e) {
+            if ($cursor->getResponse()->getHttpCode() === 404) {
                 throw RuntimeException::fromServerException($e);
             }
             throw $e;
@@ -838,18 +844,27 @@ RETURN {
     "real_stream_name": c.real_stream_name
 }
 EOF;
-            $statement = new Statement(
-                $this->connection, [
-                    Statement::ENTRY_QUERY => $aql,
-                    Statement::ENTRY_BINDVARS => [
-                        '@collection' => $this->eventStreamsTable,
-                    ],
-                    Cursor::ENTRY_FLAT => true,
+
+            $cursor = $this->connection->query(
+                Vpack::fromJson(json_encode(
+                    [
+                        Statement::ENTRY_QUERY => $aql,
+                        Statement::ENTRY_BINDVARS => [
+                            '@collection' => $this->eventStreamsTable,
+                        ],
+                        Statement::ENTRY_BATCHSIZE => 1000,
+                    ]
+                )),
+                [
+                    Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
                 ]
             );
 
-            foreach ($statement->execute() as $streamName) {
-                $streamPositions[$streamName['real_stream_name']] = 0;
+            $cursor->rewind();
+
+            while ($cursor->valid()) {
+                $streamPositions[$cursor->current()['real_stream_name']] = 0;
+                $cursor->next();
             }
 
             $this->streamPositions = array_merge($streamPositions, $this->streamPositions);
@@ -865,19 +880,28 @@ RETURN {
     "real_stream_name": c.real_stream_name
 }
 EOF;
-            $statement = new Statement(
-                $this->connection, [
-                    Statement::ENTRY_QUERY => $aql,
-                    Statement::ENTRY_BINDVARS => [
-                        '@collection' => $this->eventStreamsTable,
-                        'categories' => $this->query['categories'],
-                    ],
-                    Cursor::ENTRY_FLAT => true,
+
+            $cursor = $this->connection->query(
+                Vpack::fromJson(json_encode(
+                    [
+                        Statement::ENTRY_QUERY => $aql,
+                        Statement::ENTRY_BINDVARS => [
+                            '@collection' => $this->eventStreamsTable,
+                            'categories' => $this->query['categories'],
+                        ],
+                        Statement::ENTRY_BATCHSIZE => 1000,
+                    ]
+                )),
+                [
+                    Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
                 ]
             );
 
-            foreach ($statement->execute() as $streamName) {
-                $streamPositions[$streamName['real_stream_name']] = 0;
+            $cursor->rewind();
+
+            while ($cursor->valid()) {
+                $streamPositions[$cursor->current()['real_stream_name']] = 0;
+                $cursor->next();
             }
 
             $this->streamPositions = array_merge($streamPositions, $this->streamPositions);
@@ -895,7 +919,7 @@ EOF;
 
     private function createLockUntilString(DateTimeImmutable $from): string
     {
-        $micros = (string) ((int) $from->format('u') + ($this->lockTimeoutMs * 1000));
+        $micros = (string)((int)$from->format('u') + ($this->lockTimeoutMs * 1000));
 
         $secs = substr($micros, 0, -6);
 
