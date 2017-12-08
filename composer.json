@@ -24,15 +24,14 @@
         "php": "^7.1",
         "prooph/event-store": "^7.2",
         "triagens/arangodb": "^3.2",
-        "prooph/standard-projections": "^1.0",
-        "prooph/pdo-event-store": "^1.5"
+        "prooph/standard-projections": "^1.0"
     },
     "require-dev": {
         "container-interop/container-interop": "^1.1",
         "sandrokeil/interop-config": "2.1",
         "phpunit/phpunit": "^6.0",
         "phpspec/prophecy": "^1.7",
-        "prooph/php-cs-fixer-config": "^0.1.1",
+        "prooph/php-cs-fixer-config": "^0.2.1",
         "malukenho/docheader": "^0.1.4"
     },
     "suggest": {

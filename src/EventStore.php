@@ -22,10 +22,12 @@ use Iterator;
 use Prooph\Common\Messaging\MessageFactory;
 use Prooph\EventStore\ArangoDb\Type\DeleteCollection;
 use Prooph\EventStore\ArangoDb\Type\DeleteDocumentByExample;
+use Prooph\EventStore\ArangoDb\Type\Type;
 use Prooph\EventStore\ArangoDb\Type\UpdateDocumentByExample;
 use Prooph\EventStore\EventStore as ProophEventStore;
-use Prooph\EventStore\Exception\StreamExistsAlready;
 use Prooph\EventStore\Exception\StreamNotFound;
+use Prooph\EventStore\Exception\TransactionAlreadyStarted;
+use Prooph\EventStore\Exception\TransactionNotStarted;
 use Prooph\EventStore\Metadata\FieldType;
 use Prooph\EventStore\Metadata\MetadataMatcher;
 use Prooph\EventStore\Metadata\Operator;
@@ -33,8 +35,9 @@ use Prooph\EventStore\Stream;
 use Prooph\EventStore\StreamName;
 use function Prooph\EventStore\ArangoDb\Fn\execute;
 use function Prooph\EventStore\ArangoDb\Fn\executeInTransaction;
+use Prooph\EventStore\TransactionalEventStore;
 
-final class EventStore implements ProophEventStore
+final class EventStore implements ProophEventStore, TransactionalEventStore
 {
     private const SORT_ASC = 'ASC';
     private const SORT_DESC = 'DESC';
@@ -63,6 +66,38 @@ final class EventStore implements ProophEventStore
      */
     private $eventStreamsCollection;
 
+    /**
+     * @var bool
+     */
+    private $disableTransactionHandling;
+
+    /**
+     * @var bool
+     */
+    private $inTransaction = false;
+
+    /**
+     * @var array
+     */
+    private $writeCollections = [];
+
+    /**
+     * @var int
+     */
+    private $resultId = -1;
+
+    /**
+     * @var string
+     */
+    private $actions = '';
+
+    /**
+     * @var Type[]
+     */
+    private $nonTransactionActions = [];
+
+    private $results = [];
+
     public function __construct(
         MessageFactory $messageFactory,
         Connection $connection,
@@ -78,6 +113,7 @@ final class EventStore implements ProophEventStore
         $this->persistenceStrategy = $persistenceStrategy;
         $this->loadBatchSize = $loadBatchSize;
         $this->eventStreamsCollection = $eventStreamsCollection;
+        $this->disableTransactionHandling = $disableTransactionHandling;
     }
 
     public function updateStreamMetadata(StreamName $streamName, array $newMetadata): void
@@ -103,57 +139,67 @@ final class EventStore implements ProophEventStore
         $streamName = $stream->streamName();
         $collectionName = $this->persistenceStrategy->generateCollectionName($streamName);
 
-        execute(
-            $this->connection,
-            [
-                [
-                    409 => [StreamExistsAlready::class, $stream->streamName()],
-                ],
-            ],
-            ...$this->persistenceStrategy->createCollection($collectionName)
-        );
+        if (!$this->inTransaction && !$this->disableTransactionHandling) {
+            /* @var $type Type */
+            foreach ($this->persistenceStrategy->createCollection($collectionName) as $type) {
+                $item = $type->toHttp();
+                $this->connection->{$item[0]}(
+                    $item[1],
+                    Vpack::fromArray($item[2]),
+                    $item[3]
+                );
+            }
 
-        $actions = 'var rId0 = db.' . $this->eventStreamsCollection
+            $this->connection->post(
+                Urls::URL_DOCUMENT . '/' .  $this->eventStreamsCollection,
+                Vpack::fromArray($this->createEventStreamData($stream)),
+                ['silent' => true]
+            );
+
+            $this->connection->post(
+                Urls::URL_DOCUMENT . '/' . $collectionName,
+                Vpack::fromArray($this->persistenceStrategy->prepareData($stream->streamEvents())),
+                ['silent' => true]
+            );
+            return;
+        }
+
+        /* @var $type Type */
+        foreach ($this->persistenceStrategy->createCollection($collectionName) as $type) {
+            $this->nonTransactionActions[] = $type;
+        }
+
+        $this->actions = 'var rId' . ++$this->resultId . ' = db.' . $this->eventStreamsCollection
             . '.insert(' . json_encode([$this->createEventStreamData($stream)])
             . ', {"silent":true});';
-        $actions .= 'var rId1 = db.' . $collectionName
+        $this->results[] .= 'rId' . $this->resultId;
+        $this->writeCollections[] = $this->eventStreamsCollection;
+
+        $this->actions .= 'var rId' . ++$this->resultId . ' = db.' . $collectionName
             . '.insert(' . $this->persistenceStrategy->jsonIterator($stream->streamEvents())->asJson()
             . ', {"silent":true});';
-
-        $this->connection->post(
-            Urls::URL_TRANSACTION,
-            Vpack::fromJson(
-                json_encode(
-                    [
-                        'collections' => [
-                            'write' => [$this->eventStreamsCollection, $collectionName],
-                        ],
-                        'action' => "function () {var db = require('@arangodb').db;" . $actions . 'return {rId0,rId1}}',
-                    ]
-                )
-        ));
+        $this->results[] .= 'rId' . $this->resultId;
+        $this->writeCollections[] = $collectionName;
     }
 
     public function appendTo(StreamName $streamName, Iterator $streamEvents): void
     {
         $collectionName = $this->persistenceStrategy->generateCollectionName($streamName);
 
-        $actions = 'var rId0 = db.' . $collectionName
+        if (!$this->inTransaction && !$this->disableTransactionHandling) {
+            $this->connection->post(
+                Urls::URL_DOCUMENT . '/' . $collectionName,
+                Vpack::fromArray($this->persistenceStrategy->prepareData($streamEvents)),
+                ['silent' => true]
+            );
+            return;
+        }
+
+        $this->writeCollections[] = $collectionName;
+        $this->actions .= 'var rId' . ++$this->resultId . ' = db.' . $collectionName
             . '.insert(' . $this->persistenceStrategy->jsonIterator($streamEvents)->asJson()
             . ', {"silent":true});';
-
-        $this->connection->post(
-            Urls::URL_TRANSACTION,
-            Vpack::fromJson(
-                json_encode(
-                    [
-                        'collections' => [
-                            'write' => [$collectionName],
-                        ],
-                        'action' => "function () {var db = require('@arangodb').db;" . $actions . 'return {rId0}}',
-                    ]
-                )
-            ));
+        $this->results[] .= 'rId' . $this->resultId;
     }
 
     public function delete(StreamName $streamName): void
@@ -605,5 +651,97 @@ EOF;
             $where,
             $values,
         ];
+    }
+
+    public function beginTransaction(): void
+    {
+        if ($this->disableTransactionHandling) {
+            return;
+        }
+
+        if ($this->inTransaction) {
+            throw new TransactionAlreadyStarted();
+        }
+        $this->inTransaction = true;
+    }
+
+    public function commit(): void
+    {
+        if ($this->disableTransactionHandling) {
+            return;
+        }
+        if (!$this->inTransaction) {
+            throw new TransactionNotStarted();
+        }
+
+        try {
+            if (!empty($this->nonTransactionActions)) {
+                foreach ($this->nonTransactionActions as $type) {
+                    $item = $type->toHttp();
+                    $this->connection->{$item[0]}(
+                        $item[1],
+                        Vpack::fromArray($item[2]),
+                        $item[3]
+                    );
+                }
+            }
+
+            $this->connection->post(
+                Urls::URL_TRANSACTION,
+                Vpack::fromArray(
+                        [
+                            'collections' => [
+                                'write' => array_keys(array_flip($this->writeCollections)),
+                            ],
+                            'action' => "function () {var db = require('@arangodb').db;" . $this->actions
+                                . 'return {' . implode(',', $this->results) .'}}',
+                        ]
+                ));
+            $this->inTransaction = false;
+            $this->nonTransactionActions = [];
+            $this->results = [];
+            $this->resultId = -1;
+        } catch (\Throwable $exception) {
+        }
+    }
+
+    public function rollback(): void
+    {
+        if ($this->disableTransactionHandling) {
+            return;
+        }
+        if (!$this->inTransaction) {
+            throw new TransactionNotStarted();
+        }
+
+        $this->inTransaction = false;
+        $this->nonTransactionActions = [];
+        $this->results = [];
+        $this->resultId = -1;
+    }
+
+    public function inTransaction(): bool
+    {
+        return $this->inTransaction;
+    }
+
+    /**
+     * @throws \Exception
+     *
+     * @return mixed
+     */
+    public function transactional(callable $callable)
+    {
+        $this->beginTransaction();
+
+        try {
+            $result = $callable($this);
+            $this->commit();
+        } catch (\Throwable $e) {
+            $this->rollback();
+            throw $e;
+        }
+
+        return $result ?: true;
     }
 }
