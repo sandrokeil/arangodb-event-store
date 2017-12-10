@@ -13,8 +13,8 @@ declare(strict_types=1);
 namespace ProophTest\EventStore\ArangoDb;
 
 use ArangoDb\Connection;
+use ArangoDb\RequestFailedException;
 use ArangoDb\Vpack;
-use ArangoDBClient\UpdatePolicy;
 use ArangoDBClient\Urls;
 use function Prooph\EventStore\ArangoDb\Fn\eventStreamsBatch;
 use function Prooph\EventStore\ArangoDb\Fn\execute;
@@ -56,8 +56,8 @@ final class TestUtil
     public static function deleteCollection(Connection $connection, string $collection): void
     {
         try {
-            $connection->delete(Urls::URL_COLLECTION . '/' . $collection, Vpack::fromArray([]));
-        } catch (\ArangoDBClient\ServerException $e) {
+            $connection->delete(Urls::URL_COLLECTION . '/' . $collection);
+        } catch (RequestFailedException $e) {
             // needed if test deletes collection
         }
     }

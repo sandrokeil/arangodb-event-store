@@ -37,16 +37,14 @@ function executeInTransaction(Connection $connection, ?array $onError, Type\Type
     try {
         $response = $connection->post(
             Urls::URL_TRANSACTION,
-            Vpack::fromJson(
-                json_encode(
-                    [
-                        'collections' => [
-                            'write' => array_unique($collections),
-                        ],
-                        'action' => sprintf("function () {var db = require('@arangodb').db;%s return {%s}}", $actions,
-                            implode(',', $return)),
-                    ]
-                )
+            Vpack::fromArray(
+                [
+                    'collections' => [
+                        'write' => array_unique($collections),
+                    ],
+                    'action' => sprintf("function () {var db = require('@arangodb').db;%s return {%s}}", $actions,
+                        implode(',', $return)),
+                ]
             )
         );
     } catch (\Throwable $e) {
@@ -72,11 +70,7 @@ function execute(Connection $connection, ?array $onError, Type\Type ...$batches)
             foreach ($type->toHttp() as $item) {
                 $response = $connection->{$item[0]}(
                     $item[1],
-                    Vpack::fromJson(
-                        json_encode(
-                            $item[2]
-                        )
-                    ),
+                    Vpack::fromArray($item[2]),
                     $item[3]
                 );
                 checkResponse($response, $onError[$key] ?? null, $type);
@@ -87,11 +81,7 @@ function execute(Connection $connection, ?array $onError, Type\Type ...$batches)
 
         $response = $connection->{$item[0]}(
             $item[1],
-            Vpack::fromJson(
-                json_encode(
-                    $item[2]
-                )
-            ),
+            Vpack::fromArray($item[2]),
             $item[3]
         );
         checkResponse($response, $onError[$key] ?? null, $type);

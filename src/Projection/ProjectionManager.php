@@ -14,13 +14,13 @@ namespace Prooph\EventStore\ArangoDb\Projection;
 
 use ArangoDb\Connection;
 use ArangoDb\Cursor;
+use ArangoDb\RequestFailedException;
 use ArangoDb\Vpack;
 use ArangoDBClient\Statement;
+use ArangoDBClient\Urls;
 use Prooph\EventStore\ArangoDb\EventStore as ArangoDbEventStore;
 use Prooph\EventStore\ArangoDb\Exception;
 use Prooph\EventStore\ArangoDb\Exception\ProjectionNotFound;
-use Prooph\EventStore\ArangoDb\Type\ReadDocument;
-use Prooph\EventStore\ArangoDb\Type\UpdateDocument;
 use Prooph\EventStore\EventStore;
 use Prooph\EventStore\EventStoreDecorator;
 use Prooph\EventStore\Exception\OutOfRangeException;
@@ -30,8 +30,6 @@ use Prooph\EventStore\Projection\Projector as ProophProjector;
 use Prooph\EventStore\Projection\Query as ProophQuery;
 use Prooph\EventStore\Projection\ReadModel;
 use Prooph\EventStore\Projection\ReadModelProjector as ProophReadModelProjector;
-use function Prooph\EventStore\ArangoDb\Fn\execute;
-use function Prooph\EventStore\ArangoDb\Fn\executeInTransaction;
 
 final class ProjectionManager implements ProophProjectionManager
 {
@@ -125,53 +123,56 @@ final class ProjectionManager implements ProophProjectionManager
             $status = ProjectionStatus::DELETING()->getValue();
         }
 
-        executeInTransaction(
-            $this->connection,
-            [
-                [
-                    404 => [ProjectionNotFound::class, $name],
-                ],
-            ],
-            UpdateDocument::with(
-                $this->projectionsTable,
-                $name,
-                ['status' => $status]
-            )
-        );
+        try {
+            $this->connection->patch(
+                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $name,
+                Vpack::fromArray(
+                    ['status' => $status]
+                ),
+                ['silent' => true]
+            );
+        } catch (RequestFailedException $e) {
+            if ($e->getHttpCode() === 404) {
+                throw ProjectionNotFound::with($name, $e->getBody());
+            }
+            throw Exception\RuntimeException::fromServerException($e);
+        }
     }
 
     public function resetProjection(string $name): void
     {
-        execute(
-            $this->connection,
-            [
-                [
-                    404 => [ProjectionNotFound::class, $name],
-                ],
-            ],
-            UpdateDocument::with(
-                $this->projectionsTable,
-                $name,
-                ['status' => ProjectionStatus::RESETTING()->getValue()]
-            )
-        );
+        try {
+            $this->connection->patch(
+                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $name,
+                Vpack::fromArray(
+                    ['status' => ProjectionStatus::RESETTING()->getValue()]
+                ),
+                ['silent' => true]
+            );
+        } catch (RequestFailedException $e) {
+            if ($e->getHttpCode() === 404) {
+                throw ProjectionNotFound::with($name, $e->getBody());
+            }
+            throw Exception\RuntimeException::fromServerException($e);
+        }
     }
 
     public function stopProjection(string $name): void
     {
-        execute(
-            $this->connection,
-            [
-                [
-                    404 => [ProjectionNotFound::class, $name],
-                ],
-            ],
-            UpdateDocument::with(
-                $this->projectionsTable,
-                $name,
-                ['status' => ProjectionStatus::STOPPING()->getValue()]
-            )
-        );
+        try {
+            $this->connection->patch(
+                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $name,
+                Vpack::fromArray(
+                    ['status' => ProjectionStatus::STOPPING()->getValue()]
+                ),
+                ['silent' => true]
+            );
+        } catch (RequestFailedException $e) {
+            if ($e->getHttpCode() === 404) {
+                throw ProjectionNotFound::with($name, $e->getBody());
+            }
+            throw Exception\RuntimeException::fromServerException($e);
+        }
     }
 
     public function fetchProjectionNames(?string $filter, int $limit = 20, int $offset = 0): array
@@ -232,7 +233,7 @@ RETURN {
 }
 EOF;
         $cursor = $this->connection->query(
-            Vpack::fromJson(json_encode(
+            Vpack::fromArray(
                 [
                     Statement::ENTRY_QUERY => str_replace('%filter%', $filter, $aql),
                     Statement::ENTRY_BINDVARS => array_merge(
@@ -243,9 +244,9 @@ EOF;
                         ],
                         $values
                     ),
-                    Statement::ENTRY_BATCHSIZE => 1000,
+                    Statement::ENTRY_BATCHSIZE => 100,
                 ]
-            )),
+            ),
             [
                 Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
             ]
@@ -259,11 +260,11 @@ EOF;
                 $projectionNames[] = $cursor->current()['name'];
                 $cursor->next();
             }
-        } catch (\Throwable $e) {
-            if ($cursor->getResponse()->getHttpCode() === 404) {
-                throw Exception\RuntimeException::fromServerException($e);
+        } catch (RequestFailedException $e) {
+            if ($e->getHttpCode() === 404) {
+                throw ProjectionNotFound::with($this->projectionsTable, $e->getBody());
             }
-            throw $e;
+            throw Exception\RuntimeException::fromServerException($e);
         }
 
         return $projectionNames;
@@ -271,52 +272,53 @@ EOF;
 
     public function fetchProjectionStatus(string $name): ProjectionStatus
     {
-        $doc = ReadDocument::with($this->projectionsTable, $name);
+        try {
+            $response = $this->connection->get(
+                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $name
+            );
+        } catch (RequestFailedException $e) {
+            if ($e->getHttpCode() === 404) {
+                throw ProjectionNotFound::with($name, $e->getBody());
+            }
+            throw Exception\RuntimeException::fromServerException($e);
+        }
 
-        execute(
-            $this->connection,
-            [
-                [
-                    404 => [ProjectionNotFound::class, $name],
-                ],
-            ],
-            $doc
-        );
+        $result = json_decode($response->getBody(), true);
 
-        return ProjectionStatus::byValue($doc->result()['status']);
+        return ProjectionStatus::byValue($result['status']);
     }
 
     public function fetchProjectionStreamPositions(string $name): array
     {
-        $doc = ReadDocument::with($this->projectionsTable, $name);
+        try {
+            $response = $this->connection->get(
+                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $name
+            );
+        } catch (RequestFailedException $e) {
+            if ($e->getHttpCode() === 404) {
+                throw ProjectionNotFound::with($name, $e->getBody());
+            }
+            throw Exception\RuntimeException::fromServerException($e);
+        }
+        $result = json_decode($response->getBody(), true);
 
-        execute(
-            $this->connection,
-            [
-                [
-                    404 => [ProjectionNotFound::class, $name],
-                ],
-            ],
-            $doc
-        );
-
-        return $doc->result()['position'];
+        return $result['position'];
     }
 
     public function fetchProjectionState(string $name): array
     {
-        $doc = ReadDocument::with($this->projectionsTable, $name);
+        try {
+            $response = $this->connection->get(
+                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $name
+            );
+        } catch (RequestFailedException $e) {
+            if ($e->getHttpCode() === 404) {
+                throw ProjectionNotFound::with($name, $e->getBody());
+            }
+            throw Exception\RuntimeException::fromServerException($e);
+        }
+        $result = json_decode($response->getBody(), true);
 
-        execute(
-            $this->connection,
-            [
-                [
-                    404 => [ProjectionNotFound::class, $name],
-                ],
-            ],
-            $doc
-        );
-
-        return $doc->result()['state'];
+        return $result['state'];
     }
 }

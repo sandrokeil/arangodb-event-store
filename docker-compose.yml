@@ -15,7 +15,7 @@ services:
       - "./:/app"
 
   arangodb:
-    image: arangodb:3.2
+    image: arangodb:3.2.9
     ports:
       - 8529:8529
     environment:

@@ -362,7 +362,7 @@ RETURN {
 EOF;
 
             $cursor = $this->connection->query(
-                Vpack::fromJson(json_encode(
+                Vpack::fromArray(
                     [
                         Statement::ENTRY_QUERY => $aql,
                         Statement::ENTRY_BINDVARS => [
@@ -370,7 +370,7 @@ EOF;
                         ],
                         Statement::ENTRY_BATCHSIZE => 1000,
                     ]
-                )),
+                ),
                 [
                     Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
                 ]
@@ -398,7 +398,7 @@ RETURN {
 EOF;
 
             $cursor = $this->connection->query(
-                Vpack::fromJson(json_encode(
+                Vpack::fromArray(
                     [
                         Statement::ENTRY_QUERY => $aql,
                         Statement::ENTRY_BINDVARS => [
@@ -407,7 +407,7 @@ EOF;
                         ],
                         Statement::ENTRY_BATCHSIZE => 1000,
                     ]
-                )),
+                ),
                 [
                     Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
                 ]

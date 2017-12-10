@@ -12,6 +12,7 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Exception;
 
+use ArangoDb\RequestFailedException;
 use Prooph\EventStore\ArangoDb\Type\Type;
 use Prooph\EventStore\Exception\RuntimeException as EventStoreRuntimeException;
 
@@ -32,7 +33,7 @@ class RuntimeException extends EventStoreRuntimeException implements ArangoDbEve
         );
     }
 
-    public static function fromServerException(\Throwable $e)
+    public static function fromServerException(RequestFailedException $e)
     {
         return new self($e->getMessage(), $e->getCode(), $e);
     }

@@ -49,7 +49,6 @@ $readModel = new class() implements ReadModel {
 };
 
 $connection = TestUtil::getClient();
-TestUtil::setupCollections($connection);
 
 $eventStore = new EventStore(
     new FQCNMessageFactory(),

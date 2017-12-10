@@ -16,7 +16,7 @@ use ArangoDb\Connection;
 use Prooph\Common\Messaging\FQCNMessageFactory;
 use Prooph\EventStore\ArangoDb\EventStore;
 use Prooph\EventStore\ArangoDb\Exception\InvalidArgumentException;
-use Prooph\EventStore\ArangoDb\Exception\RuntimeException;
+use Prooph\EventStore\ArangoDb\Exception\ProjectionNotFound;
 use Prooph\EventStore\ArangoDb\PersistenceStrategy;
 use Prooph\EventStore\ArangoDb\Projection\ProjectionManager;
 use Prooph\EventStore\EventStore as ProophEventStore;
@@ -67,9 +67,9 @@ abstract class AbstractProjectionManagerTest extends BaseTestCase
     /**
      * @test
      */
-    public function it_throws_exception_when_fetching_projecton_names_with_missing_db_table(): void
+    public function it_throws_exception_when_fetching_projection_names_with_missing_db_table(): void
     {
-        $this->expectException(RuntimeException::class);
+        $this->expectException(ProjectionNotFound::class);
 
         TestUtil::deleteCollection($this->connection, 'projections');
 
@@ -90,9 +90,9 @@ abstract class AbstractProjectionManagerTest extends BaseTestCase
     /**
      * @test
      */
-    public function it_throws_exception_when_fetching_projecton_names_regex_with_missing_db_table(): void
+    public function it_throws_exception_when_fetching_projection_names_regex_with_missing_db_table(): void
     {
-        $this->expectException(RuntimeException::class);
+        $this->expectException(ProjectionNotFound::class);
 
         TestUtil::deleteCollection($this->connection, 'projections');
 
