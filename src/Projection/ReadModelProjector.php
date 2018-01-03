@@ -527,13 +527,13 @@ final class ReadModelProjector implements ProophReadModelProjector
             return ProjectionStatus::RUNNING();
         }
 
-        $result = json_decode($response->getBody(), true);
+        $status = $response->get('status');
 
-        if (empty($result['status'])) {
+        if (empty($status)) {
             return ProjectionStatus::RUNNING();
         }
 
-        return ProjectionStatus::byValue($result['status']);
+        return ProjectionStatus::byValue($status);
     }
 
     private function handleStreamWithSingleHandler(string $streamName, Iterator $events): void

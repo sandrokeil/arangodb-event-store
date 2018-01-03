@@ -15,7 +15,6 @@ namespace Prooph\EventStore\ArangoDb;
 use ArangoDb\Cursor;
 use DateTimeImmutable;
 use DateTimeZone;
-use IteratorIterator;
 use Prooph\Common\Messaging\Message;
 use Prooph\Common\Messaging\MessageFactory;
 

@@ -14,6 +14,18 @@ services:
     volumes:
       - "./:/app"
 
+  # To run tests docker-compose run --rm php-polyfill vendor/bin/phpunit
+  php-polyfill:
+    image: prooph/php:7.1-cli-xdebug
+    environment:
+      PHP_IDE_CONFIG: "serverName=application"
+      arangodb_host: "vst://arangodb:8529"
+      arangodb_username: ""
+      arangodb_password: ""
+      arangodb_dbname: _system
+    volumes:
+      - "./:/app"
+
   arangodb:
     image: arangodb:3.2.9
     ports:

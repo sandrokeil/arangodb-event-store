@@ -32,19 +32,20 @@
         "phpunit/phpunit": "^6.0",
         "phpspec/prophecy": "^1.7",
         "prooph/php-cs-fixer-config": "^0.2.1",
-        "malukenho/docheader": "^0.1.4"
+        "malukenho/docheader": "^0.1.4",
+        "prooph/arangodb-php-driver-polyfill": "dev-master"
     },
     "suggest": {
         "psr/container": "^1.0 for usage of provided factories",
-        "sandrokeil/interop-config": "^2.0.1 for usage of provided factories"
+        "sandrokeil/interop-config": "^2.0.1 for usage of provided factories",
+        "prooph/arangodb-php-driver-polyfill": "ArangoDB PHP extension polyfill if needed"
     },
     "conflict": {
         "sandrokeil/interop-config": "<2.0.1"
     },
     "autoload": {
         "psr-4": {
-            "Prooph\\EventStore\\ArangoDb\\": "src/",
-            "ProophTest\\EventStore\\ArangoDb\\": "tests/"
+            "Prooph\\EventStore\\ArangoDb\\": "src/"
         },
         "files": ["src/Fn.php"]
     },
@@ -69,5 +70,11 @@
         "cs-fix": "php-cs-fixer fix -v --diff",
         "docheader": "docheader check src/ tests/",
         "test": "phpunit"
-    }
+    },
+    "repositories": [
+        {
+            "type": "git",
+            "url": "https://github.com/sandrokeil/arangodb-php-driver-polyfill.git"
+        }
+    ]
 }

@@ -283,9 +283,7 @@ EOF;
             throw Exception\RuntimeException::fromServerException($e);
         }
 
-        $result = json_decode($response->getBody(), true);
-
-        return ProjectionStatus::byValue($result['status']);
+        return ProjectionStatus::byValue($response->get('status'));
     }
 
     public function fetchProjectionStreamPositions(string $name): array
