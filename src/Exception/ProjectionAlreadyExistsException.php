@@ -12,21 +12,21 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Exception;
 
-use ArangoDBClient\HttpResponse;
+use ArangoDb\Response;
 
 class ProjectionAlreadyExistsException extends RuntimeException
 {
     /**
-     * @var HttpResponse
+     * @var Response
      */
     private $response;
 
-    public function response(): ?HttpResponse
+    public function response(): ?Response
     {
         return $this->response;
     }
 
-    public static function with(string $projectionName, ?HttpResponse $response): ProjectionAlreadyExistsException
+    public static function with(string $projectionName, ?Response $response): ProjectionAlreadyExistsException
     {
         $self = new self(sprintf('Another projection process is already running for projection "%s"', $projectionName));
         $self->response = $response;

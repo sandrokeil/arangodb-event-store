@@ -12,9 +12,12 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Projection;
 
-use ArangoDBClient\Connection;
-use ArangoDBClient\Cursor;
+use ArangoDb\Connection;
+use ArangoDb\Cursor;
+use ArangoDb\RequestFailedException;
+use ArangoDb\Vpack;
 use ArangoDBClient\Statement;
+use ArangoDBClient\Urls;
 use ArrayIterator;
 use Closure;
 use DateTimeImmutable;
@@ -24,13 +27,8 @@ use Iterator;
 use Prooph\Common\Messaging\Message;
 use Prooph\EventStore\ArangoDb\EventStore as ArangoDbEventStore;
 use Prooph\EventStore\ArangoDb\Exception\ProjectionAlreadyExistsException;
-use Prooph\EventStore\ArangoDb\Exception\ProjectionNotCreatedException;
 use Prooph\EventStore\ArangoDb\Exception\ProjectionNotFound;
 use Prooph\EventStore\ArangoDb\Exception\RuntimeException;
-use Prooph\EventStore\ArangoDb\Type\DeleteDocument;
-use Prooph\EventStore\ArangoDb\Type\InsertDocument;
-use Prooph\EventStore\ArangoDb\Type\ReadDocument;
-use Prooph\EventStore\ArangoDb\Type\UpdateDocument;
 use Prooph\EventStore\EventStore;
 use Prooph\EventStore\EventStoreDecorator;
 use Prooph\EventStore\Exception;
@@ -39,7 +37,6 @@ use Prooph\EventStore\Projection\Projector as ProophProjector;
 use Prooph\EventStore\Stream;
 use Prooph\EventStore\StreamName;
 use Prooph\EventStore\Util\ArrayCache;
-use function Prooph\EventStore\ArangoDb\Fn\execute;
 
 final class Projector implements ProophProjector
 {
@@ -341,25 +338,24 @@ final class Projector implements ProophProjector
         }
 
         try {
-            execute(
-                $this->connection,
-                [
-                    [
-                        404 => [ProjectionNotFound::class, $this->name],
-                    ],
-                ],
-                UpdateDocument::with(
-                    $this->projectionsTable,
-                    $this->name,
+            $this->connection->patch(
+                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name,
+                Vpack::fromArray(
                     [
                         'state' => $this->state,
                         'status' => ProjectionStatus::STOPPING()->getValue(),
                         'position' => $this->streamPositions,
                     ]
-                )
+                ),
+                [
+                    'silent' => true,
+                    'mergeObjects' => false,
+                ]
             );
-        } catch (ProjectionNotFound $exception) {
-            // ignore
+        } catch (RequestFailedException $e) {
+            if ($e->getHttpCode() !== 404) {
+                throw RuntimeException::fromServerException($e);
+            }
         }
 
         try {
@@ -373,44 +369,38 @@ final class Projector implements ProophProjector
     {
         $this->isStopped = true;
         try {
-            execute(
-                $this->connection,
-                [
-                    [
-                        404 => [ProjectionNotFound::class, $this->name],
-                    ],
-                ],
-                UpdateDocument::with(
-                    $this->projectionsTable,
-                    $this->name,
+            $this->connection->patch(
+                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name,
+                Vpack::fromArray(
                     [
                         'status' => ProjectionStatus::IDLE()->getValue(),
                     ]
-                )
+                ),
+                ['silent' => true]
             );
-        } catch (ProjectionNotFound $exception) {
+        } catch (RequestFailedException $e) {
             // ignore
+            if ($e->getHttpCode() !== 404) {
+                throw RuntimeException::fromServerException($e);
+            }
         }
-
         $this->status = ProjectionStatus::IDLE();
     }
 
     public function delete(bool $deleteEmittedEvents): void
     {
         try {
-            execute(
-                $this->connection,
-                [
-                    [
-                        422 => [ProjectionNotFound::class, $this->name],
-                    ],
-                ],
-                DeleteDocument::with(
-                    $this->projectionsTable, [$this->name]
+            $this->connection->delete(
+                Urls::URL_DOCUMENT . '/' . $this->projectionsTable,
+                Vpack::fromArray(
+                    [$this->name]
                 )
             );
-        } catch (ProjectionNotFound $exception) {
+        } catch (RequestFailedException $e) {
             // ignore
+            if ($e->getHttpCode() !== 422) {
+                throw RuntimeException::fromServerException($e);
+            }
         }
 
         if ($deleteEmittedEvents) {
@@ -551,29 +541,29 @@ final class Projector implements ProophProjector
 
     private function fetchRemoteStatus(): ProjectionStatus
     {
-        $query = ReadDocument::with($this->projectionsTable, $this->name);
+        $response = null;
 
         try {
-            execute(
-                $this->connection,
-                [
-                    [
-                        404 => [ProjectionNotFound::class, $this->name],
-                    ],
-                ],
-                $query
+            $response = $this->connection->get(
+                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name
             );
-        } catch (ProjectionNotFound $e) {
+        } catch (RequestFailedException $e) {
             // ignore
+            if ($e->getHttpCode() !== 404) {
+                throw RuntimeException::fromServerException($e);
+            }
         }
-
-        $result = $query->result();
-
-        if (empty($result['status'])) {
+        if (!$response) {
             return ProjectionStatus::RUNNING();
         }
 
-        return ProjectionStatus::byValue($result['status']);
+        $status = $response->get('status');
+
+        if (empty($status)) {
+            return ProjectionStatus::RUNNING();
+        }
+
+        return ProjectionStatus::byValue($status);
     }
 
     private function handleStreamWithSingleHandler(string $streamName, Iterator $events): void
@@ -678,23 +668,23 @@ final class Projector implements ProophProjector
 
     private function load(): void
     {
-        $query = ReadDocument::with($this->projectionsTable, $this->name);
+        $response = null;
 
         try {
-            execute(
-                $this->connection,
-                [
-                    [
-                        404 => [ProjectionNotFound::class, $this->name],
-                    ],
-                ],
-                $query
+            $response = $this->connection->get(
+                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name
             );
-        } catch (ProjectionNotFound $e) {
-            // ignore not found error
+        } catch (RequestFailedException $e) {
+            // ignore
+            if ($e->getHttpCode() !== 404) {
+                throw RuntimeException::fromServerException($e);
+            }
+        }
+        if (!$response) {
+            return;
         }
 
-        $result = $query->result();
+        $result = json_decode($response->getBody(), true);
 
         if (isset($result['position'], $result['state'])) {
             $this->streamPositions = array_merge($this->streamPositions, $result['position']);
@@ -709,30 +699,26 @@ final class Projector implements ProophProjector
     private function createProjection(): void
     {
         try {
-            execute(
-                $this->connection,
-                [
+            $this->connection->post(
+                Urls::URL_DOCUMENT . '/' . $this->projectionsTable,
+                Vpack::fromArray([
                     [
-                        400 => [ProjectionNotCreatedException::class, $this->name],
-                        404 => [ProjectionNotCreatedException::class, $this->name],
-                        409 => [ProjectionAlreadyExistsException::class, $this->name],
+                        '_key' => $this->name,
+                        'position' => (object)null,
+                        'state' => (object)null,
+                        'status' => $this->status->getValue(),
+                        'locked_until' => null,
                     ],
-                ],
-                InsertDocument::with(
-                    $this->projectionsTable,
-                    [
-                        [
-                            '_key' => $this->name,
-                            'position' => (object) null,
-                            'state' => (object) null,
-                            'status' => $this->status->getValue(),
-                            'locked_until' => null,
-                        ],
-                    ]
-                )
+                ]),
+                ['silent' => true]
             );
-        } catch (ProjectionNotCreatedException | ProjectionAlreadyExistsException $execption) {
+        } catch (RequestFailedException $e) {
             // we ignore any occurring error here (duplicate projection)
+            $httpCode = $e->getHttpCode();
+
+            if ($httpCode !== 400 && $httpCode !== 404 && $httpCode !== 409) {
+                throw RuntimeException::fromServerException($e);
+            }
         }
     }
 
@@ -755,31 +741,35 @@ IN @@collection
 RETURN NEW
 EOF;
 
-        $statement = new Statement(
-            $this->connection, [
-                Statement::ENTRY_QUERY => $aql,
-                Statement::ENTRY_BINDVARS => [
-                    '@collection' => $this->projectionsTable,
-                    'name' => $this->name,
-                    'lockedUntil' => $lockUntilString,
-                    'nowString' => $nowString,
-                    'status' => ProjectionStatus::RUNNING()->getValue(),
-                ],
-                Cursor::ENTRY_FLAT => true,
+        $cursor = $this->connection->query(
+            Vpack::fromArray(
+                [
+                    Statement::ENTRY_QUERY => $aql,
+                    Statement::ENTRY_BINDVARS => [
+                        '@collection' => $this->projectionsTable,
+                        'name' => $this->name,
+                        'lockedUntil' => $lockUntilString,
+                        'nowString' => $nowString,
+                        'status' => ProjectionStatus::RUNNING()->getValue(),
+                    ],
+                    Statement::ENTRY_BATCHSIZE => 1,
+                ]
+            ),
+            [
+                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
             ]
         );
 
         try {
-            $result = $statement->execute();
-
-            if ($result->getCount() === 0) {
+            $cursor->rewind();
+            if ($cursor->count() === 0) {
                 throw new Exception\RuntimeException('Another projection process is already running');
             }
-        } catch (\ArangoDBClient\ServerException $e) {
-            if ($e->getCode() === 404) {
-                throw RuntimeException::fromServerException($e);
+        } catch (RequestFailedException $e) {
+            if ($e->getHttpCode() === 404) {
+                throw ProjectionNotFound::with($this->projectionsTable, $e->getBody());
             }
-            throw $e;
+            throw RuntimeException::fromServerException($e);
         }
 
         $this->status = ProjectionStatus::RUNNING();
@@ -788,47 +778,44 @@ EOF;
     private function updateLock(): void
     {
         $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
-
         $lockUntilString = $this->createLockUntilString($now);
 
-        execute(
-            $this->connection,
-            [
-                [
-                    404 => [ProjectionNotFound::class, $this->name],
-                ],
-            ],
-            UpdateDocument::with(
-                $this->projectionsTable,
-                $this->name,
-                [
-                    'locked_until' => $lockUntilString,
-                ]
-            )
-        );
+        try {
+            $this->connection->patch(
+                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name,
+                Vpack::fromArray(
+                    [
+                        'locked_until' => $lockUntilString,
+                    ]
+                ),
+                ['silent' => true]
+            );
+        } catch (RequestFailedException $e) {
+            if ($e->getHttpCode() === 404) {
+                throw ProjectionNotFound::with($this->name, $e->getBody());
+            }
+            throw RuntimeException::fromServerException($e);
+        }
     }
 
     private function releaseLock(): void
     {
         try {
-            execute(
-                $this->connection,
-                [
-                    [
-                        404 => [ProjectionNotFound::class, $this->name],
-                    ],
-                ],
-                UpdateDocument::with(
-                    $this->projectionsTable,
-                    $this->name,
+            $this->connection->patch(
+                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name,
+                Vpack::fromArray(
                     [
                         'status' => ProjectionStatus::IDLE()->getValue(),
                         'locked_until' => null,
                     ]
-                )
+                ),
+                ['silent' => true]
             );
-        } catch (ProjectionNotFound $exception) {
+        } catch (RequestFailedException $e) {
             //  ignore not found error
+            if ($e->getHttpCode() !== 404) {
+                throw RuntimeException::fromServerException($e);
+            }
         }
 
         $this->status = ProjectionStatus::IDLE();
@@ -837,29 +824,28 @@ EOF;
     private function persist(): void
     {
         $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
-
         $lockUntilString = $this->createLockUntilString($now);
 
         try {
-            execute(
-                $this->connection,
-                [
-                    [
-                        404 => [ProjectionNotFound::class, $this->name],
-                    ],
-                ],
-                UpdateDocument::with(
-                    $this->projectionsTable,
-                    $this->name,
+            $this->connection->patch(
+                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name,
+                Vpack::fromArray(
                     [
                         'position' => $this->streamPositions,
                         'state' => $this->state,
                         'locked_until' => $lockUntilString,
                     ]
-                )
+                ),
+                [
+                    'silent' => true,
+                    'mergeObjects' => false,
+                ]
             );
-        } catch (ProjectionNotFound $exception) {
-            //  ignore not found errorF
+        } catch (RequestFailedException $e) {
+            //  ignore not found error
+            if ($e->getHttpCode() !== 404) {
+                throw RuntimeException::fromServerException($e);
+            }
         }
     }
 
@@ -875,18 +861,27 @@ RETURN {
     "real_stream_name": c.real_stream_name
 }
 EOF;
-            $statement = new Statement(
-                $this->connection, [
-                    Statement::ENTRY_QUERY => $aql,
-                    Statement::ENTRY_BINDVARS => [
-                        '@collection' => $this->eventStreamsTable,
-                    ],
-                    Cursor::ENTRY_FLAT => true,
+
+            $cursor = $this->connection->query(
+                Vpack::fromArray(
+                    [
+                        Statement::ENTRY_QUERY => $aql,
+                        Statement::ENTRY_BINDVARS => [
+                            '@collection' => $this->eventStreamsTable,
+                        ],
+                        Statement::ENTRY_BATCHSIZE => 1000,
+                    ]
+                ),
+                [
+                    Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
                 ]
             );
 
-            foreach ($statement->execute() as $streamName) {
-                $streamPositions[$streamName['real_stream_name']] = 0;
+            $cursor->rewind();
+
+            while ($cursor->valid()) {
+                $streamPositions[$cursor->current()['real_stream_name']] = 0;
+                $cursor->next();
             }
 
             $this->streamPositions = array_merge($streamPositions, $this->streamPositions);
@@ -902,19 +897,27 @@ RETURN {
     "real_stream_name": c.real_stream_name
 }
 EOF;
-            $statement = new Statement(
-                $this->connection, [
-                    Statement::ENTRY_QUERY => $aql,
-                    Statement::ENTRY_BINDVARS => [
-                        '@collection' => $this->eventStreamsTable,
-                        'categories' => $this->query['categories'],
-                    ],
-                    Cursor::ENTRY_FLAT => true,
+            $cursor = $this->connection->query(
+                Vpack::fromArray(
+                    [
+                        Statement::ENTRY_QUERY => $aql,
+                        Statement::ENTRY_BINDVARS => [
+                            '@collection' => $this->eventStreamsTable,
+                            'categories' => $this->query['categories'],
+                        ],
+                        Statement::ENTRY_BATCHSIZE => 1000,
+                    ]
+                ),
+                [
+                    Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
                 ]
             );
 
-            foreach ($statement->execute() as $streamName) {
-                $streamPositions[$streamName['real_stream_name']] = 0;
+            $cursor->rewind();
+
+            while ($cursor->valid()) {
+                $streamPositions[$cursor->current()['real_stream_name']] = 0;
+                $cursor->next();
             }
 
             $this->streamPositions = array_merge($streamPositions, $this->streamPositions);

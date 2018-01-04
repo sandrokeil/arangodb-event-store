@@ -12,7 +12,7 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Type;
 
-use ArangoDBClient\HttpResponse;
+use ArangoDb\Response;
 
 interface Type
 {
@@ -22,5 +22,5 @@ interface Type
 
     public function collectionName(): string;
 
-    public function checkResponse(HttpResponse $response, string $rId = null): ?int;
+    public function checkResponse(Response $response, string $rId = null): ?int;
 }

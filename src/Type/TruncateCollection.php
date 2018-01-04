@@ -13,7 +13,7 @@ declare(strict_types=1);
 namespace Prooph\EventStore\ArangoDb\Type;
 
 use ArangoDBClient\HttpHelper;
-use ArangoDBClient\HttpResponse;
+use ArangoDb\Response;
 use ArangoDBClient\Urls;
 
 final class TruncateCollection implements Type
@@ -35,7 +35,7 @@ final class TruncateCollection implements Type
     private function __construct(string $collectionName, callable $inspector = null)
     {
         $this->collectionName = $collectionName;
-        $this->inspector = $inspector ?: function (HttpResponse $response, string $rId = null) {
+        $this->inspector = $inspector ?: function (Response $response, string $rId = null) {
             if ($rId) {
                 return null;
             }
@@ -61,7 +61,7 @@ final class TruncateCollection implements Type
      * @see https://docs.arangodb.com/3.2/Manual/DataModeling/Collections/DatabaseMethods.html#truncate
      *
      * @param string $collectionName
-     * @param callable $inspector Inspects result, signature is (HttpResponse $response, string $rId = null)
+     * @param callable $inspector Inspects result, signature is (Response $response, string $rId = null)
      * @return TruncateCollection
      */
     public static function withInspector(
@@ -71,7 +71,7 @@ final class TruncateCollection implements Type
         return new self($collectionName, $inspector);
     }
 
-    public function checkResponse(HttpResponse $response, string $rId = null): ?int
+    public function checkResponse(Response $response, string $rId = null): ?int
     {
         return ($this->inspector)($response, $rId);
     }

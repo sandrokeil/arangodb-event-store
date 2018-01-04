@@ -33,6 +33,6 @@ $ docker-compose up -d --no-recreate
 Execute tests with
 
 ```
-$ docker-compose run --rm php vendor/bin/phpunit`
+$ docker-compose run --rm php vendor/bin/phpunit
 ```
 

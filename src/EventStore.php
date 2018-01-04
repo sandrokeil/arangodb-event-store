@@ -12,28 +12,31 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb;
 
-use ArangoDBClient\Connection;
-use ArangoDBClient\Cursor;
+use ArangoDb\Connection;
+use ArangoDb\Cursor;
+use ArangoDb\RequestFailedException;
+use ArangoDb\Response;
+use ArangoDb\Vpack;
 use ArangoDBClient\Statement;
+use ArangoDBClient\Urls;
 use Assert\Assertion;
 use Iterator;
 use Prooph\Common\Messaging\MessageFactory;
-use Prooph\EventStore\ArangoDb\Type\DeleteCollection;
-use Prooph\EventStore\ArangoDb\Type\DeleteDocumentByExample;
-use Prooph\EventStore\ArangoDb\Type\InsertDocument;
-use Prooph\EventStore\ArangoDb\Type\UpdateDocumentByExample;
+use Prooph\EventStore\ArangoDb\Exception\RuntimeException;
+use Prooph\EventStore\ArangoDb\Type\Type;
 use Prooph\EventStore\EventStore as ProophEventStore;
 use Prooph\EventStore\Exception\StreamExistsAlready;
 use Prooph\EventStore\Exception\StreamNotFound;
+use Prooph\EventStore\Exception\TransactionAlreadyStarted;
+use Prooph\EventStore\Exception\TransactionNotStarted;
 use Prooph\EventStore\Metadata\FieldType;
 use Prooph\EventStore\Metadata\MetadataMatcher;
 use Prooph\EventStore\Metadata\Operator;
 use Prooph\EventStore\Stream;
 use Prooph\EventStore\StreamName;
-use function Prooph\EventStore\ArangoDb\Fn\execute;
-use function Prooph\EventStore\ArangoDb\Fn\executeInTransaction;
+use Prooph\EventStore\TransactionalEventStore;
 
-final class EventStore implements ProophEventStore
+final class EventStore implements ProophEventStore, TransactionalEventStore
 {
     private const SORT_ASC = 'ASC';
     private const SORT_DESC = 'DESC';
@@ -62,6 +65,43 @@ final class EventStore implements ProophEventStore
      */
     private $eventStreamsCollection;
 
+    /**
+     * @var bool
+     */
+    private $disableTransactionHandling;
+
+    /**
+     * @var bool
+     */
+    private $inTransaction = false;
+
+    /**
+     * @var array
+     */
+    private $writeCollections = [];
+
+    /**
+     * @var int
+     */
+    private $resultId = -1;
+
+    /**
+     * @var string
+     */
+    private $actions = '';
+
+    /**
+     * @var Type[]
+     */
+    private $nonTransactionActions = [];
+
+    private $results = [];
+
+    /**
+     * @var array
+     */
+    private $guards = [];
+
     public function __construct(
         MessageFactory $messageFactory,
         Connection $connection,
@@ -77,24 +117,52 @@ final class EventStore implements ProophEventStore
         $this->persistenceStrategy = $persistenceStrategy;
         $this->loadBatchSize = $loadBatchSize;
         $this->eventStreamsCollection = $eventStreamsCollection;
+        $this->disableTransactionHandling = $disableTransactionHandling;
     }
 
     public function updateStreamMetadata(StreamName $streamName, array $newMetadata): void
     {
-        executeInTransaction(
-            $this->connection,
-            [
-                [
-                    404 => [StreamNotFound::class, $streamName],
-                ],
-            ],
-            UpdateDocumentByExample::with(
-                $this->eventStreamsCollection,
-                ['real_stream_name' => $streamName->toString()],
-                ['metadata' => $newMetadata],
-                ['mergeObjects' => false]
-            )
-        );
+        $wasInTransaction = $this->inTransaction;
+        $disableTransactionHandling = $this->disableTransactionHandling;
+        $this->disableTransactionHandling = false;
+
+        if (!$wasInTransaction) {
+            $this->beginTransaction();
+        }
+        try {
+            $this->writeCollections[] = $this->eventStreamsCollection;
+
+            $this->actions .= 'var rId' . ++$this->resultId . ' = db.' . $this->eventStreamsCollection
+                . '.updateByExample('
+                . json_encode(['real_stream_name' => $streamName->toString()]) . ', '
+                . '{"metadata":' . json_encode($newMetadata) . '}, '
+                . '{"mergeObjects": false}'
+                . ');';
+            $rId = 'rId' . $this->resultId;
+            $this->results[] .= $rId;
+
+            $this->guards[] = function (Response $response) use ($rId, $streamName) {
+                if (strpos($response->getBody(), '"' . $rId . '"' . ':0') !== false) {
+                    throw StreamNotFound::with($streamName);
+                }
+            };
+
+            if (!$wasInTransaction) {
+                $this->commit();
+            }
+
+            $this->disableTransactionHandling = $disableTransactionHandling;
+        } catch (RequestFailedException $e) {
+            if (!$wasInTransaction) {
+                $this->rollback();
+            }
+            $this->disableTransactionHandling = $disableTransactionHandling;
+
+            if ($e->getHttpCode() === 404) {
+                throw StreamNotFound::with($streamName);
+            }
+            throw RuntimeException::fromServerException($e);
+        }
     }
 
     public function create(Stream $stream): void
@@ -102,64 +170,113 @@ final class EventStore implements ProophEventStore
         $streamName = $stream->streamName();
         $collectionName = $this->persistenceStrategy->generateCollectionName($streamName);
 
-        execute(
-            $this->connection,
-            [
-                [
-                    409 => [StreamExistsAlready::class, $stream->streamName()],
-                ],
-            ],
-            ...$this->persistenceStrategy->createCollection($collectionName)
-        );
+        if (!$this->inTransaction && !$this->disableTransactionHandling) {
+            try {
+                /* @var $type Type */
+                foreach ($this->persistenceStrategy->createCollection($collectionName) as $type) {
+                    $item = $type->toHttp();
+                    $this->connection->{$item[0]}(
+                        $item[1],
+                        Vpack::fromArray($item[2]),
+                        $item[3]
+                    );
+                }
+                $this->connection->post(
+                    Urls::URL_DOCUMENT . '/' .  $this->eventStreamsCollection,
+                    Vpack::fromArray($this->createEventStreamData($stream)),
+                    ['silent' => true]
+                );
+                $this->appendTo($streamName, $stream->streamEvents());
+            } catch (RequestFailedException $e) {
+                if ($e->getHttpCode() === 409) {
+                    throw StreamExistsAlready::with($streamName);
+                }
+                throw RuntimeException::fromServerException($e);
+            }
+            return;
+        }
 
-        executeInTransaction(
-            $this->connection,
-            [
-                [
-                    409 => [StreamExistsAlready::class, $stream->streamName()],
-                    [
-                        \Prooph\EventStore\ArangoDb\Exception\RuntimeException::class,
-                        'Could not insert streams for "' . $stream->streamName()->toString() . '"',
-                    ],
-                ],
-            ],
-            InsertDocument::with($this->eventStreamsCollection, [$this->createEventStreamData($stream)]),
-            InsertDocument::with($collectionName, $this->persistenceStrategy->jsonIterator($stream->streamEvents()))
-        );
+        /* @var $type Type */
+        foreach ($this->persistenceStrategy->createCollection($collectionName) as $type) {
+            $this->nonTransactionActions[] = $type;
+        }
+
+        $this->actions = 'var rId' . ++$this->resultId . ' = db.' . $this->eventStreamsCollection
+            . '.insert(' . json_encode([$this->createEventStreamData($stream)])
+            . ', {"silent":true});';
+
+        $this->results[] .= 'rId' . $this->resultId;
+        $this->writeCollections[] = $this->eventStreamsCollection;
+
+        $this->appendTo($streamName, $stream->streamEvents());
     }
 
     public function appendTo(StreamName $streamName, Iterator $streamEvents): void
     {
         $collectionName = $this->persistenceStrategy->generateCollectionName($streamName);
 
-        executeInTransaction(
-            $this->connection,
-            [
-                [
-                    404 => [StreamNotFound::class, $streamName],
-                ],
-            ],
-            InsertDocument::with($collectionName, $this->persistenceStrategy->jsonIterator($streamEvents))
-        );
+        if (!$this->inTransaction && !$this->disableTransactionHandling) {
+            $data = $this->persistenceStrategy->prepareData($streamEvents);
+
+            if (empty($data)) {
+                return;
+            }
+
+            try {
+                $this->connection->post(
+                    Urls::URL_DOCUMENT . '/' . $collectionName,
+                    Vpack::fromArray($data),
+                    ['silent' => true]
+                );
+            } catch (RequestFailedException $e) {
+                if ($e->getHttpCode() === 404) {
+                    throw StreamNotFound::with($streamName);
+                }
+                throw RuntimeException::fromServerException($e);
+            }
+            return;
+        }
+
+        $data = $this->persistenceStrategy->jsonIterator($streamEvents)->asJson();
+
+        if (\strlen($data) < 4) {
+            return;
+        }
+
+        $this->writeCollections[] = $collectionName;
+        $this->actions .= 'var rId' . ++$this->resultId . ' = db.' . $collectionName
+            . '.insert(' . $data
+            . ', {"silent":true});';
+        $this->results[] .= 'rId' . $this->resultId;
     }
 
     public function delete(StreamName $streamName): void
     {
-        execute(
-            $this->connection,
-            [
-                [
-                    404 => [StreamNotFound::class, $streamName],
-                ],
-                [
-                    404 => [StreamNotFound::class, $streamName],
-                ],
-            ],
-            DeleteDocumentByExample::with(
-                $this->eventStreamsCollection, ['real_stream_name' => $streamName->toString()]
-            ),
-            DeleteCollection::with($this->persistenceStrategy->generateCollectionName($streamName))
-        );
+        try {
+            $this->connection->delete(
+                Urls::URL_COLLECTION . '/' . $this->persistenceStrategy->generateCollectionName($streamName)
+            );
+
+            $response = $this->connection->put(
+                Urls::URL_REMOVE_BY_EXAMPLE,
+                Vpack::fromArray(
+                    [
+                        'collection' => $this->eventStreamsCollection,
+                        'example' => ['real_stream_name' => $streamName->toString()],
+                    ]
+                )
+            );
+
+            if (strpos($response->getBody(), '"deleted":0') !== false) {
+                throw StreamNotFound::with($streamName);
+            }
+
+        } catch (RequestFailedException $e) {
+            if ($e->getHttpCode() === 404) {
+                throw StreamNotFound::with($streamName);
+            }
+            throw RuntimeException::fromServerException($e);
+        }
     }
 
     public function load(
@@ -221,32 +338,37 @@ RETURN {
 EOF;
         $collectionName = $this->persistenceStrategy->generateCollectionName($streamName);
 
-        $statement = new Statement(
-            $this->connection, [
-                Statement::ENTRY_QUERY => str_replace(
-                    ['%DIR%', '%op%', '%filter%'],
-                    [$dir, $dir === self::SORT_ASC ? '>=' : '<=', $filter],
-                    $aql
-                ),
-                Statement::ENTRY_BINDVARS => array_merge(
-                    [
-                        '@collection' => $collectionName,
-                        'from' => (string) $fromNumber,
-                        'limit' => $limit,
-                    ],
-                    $values),
-                Cursor::ENTRY_FLAT => true,
+        $cursor = $this->connection->query(
+            Vpack::fromArray(
+                [
+                    Statement::ENTRY_QUERY => str_replace(
+                        ['%DIR%', '%op%', '%filter%'],
+                        [$dir, $dir === self::SORT_ASC ? '>=' : '<=', $filter],
+                        $aql
+                    ),
+                    Statement::ENTRY_BINDVARS => array_merge(
+                        [
+                            '@collection' => $collectionName,
+                            'from' => (string)$fromNumber,
+                            'limit' => $limit,
+                        ],
+                        $values),
+                    Statement::ENTRY_BATCHSIZE => 1000,
+                ]
+            ),
+            [
+                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_JSON,
             ]
         );
 
         try {
             return new StreamIterator(
-                $statement->execute(),
+                $cursor,
                 $this->persistenceStrategy->offsetNumber(),
                 $this->messageFactory
             );
-        } catch (\ArangoDBClient\ServerException $e) {
-            if ($e->getCode() === 404) {
+        } catch (\Throwable $e) {
+            if ($cursor->getResponse()->getHttpCode() === 404) {
                 throw StreamNotFound::with($streamName);
             }
             throw $e;
@@ -306,25 +428,33 @@ RETURN {
     "real_stream_name": c.real_stream_name
 }
 EOF;
-        $statement = new Statement(
-            $this->connection, [
-                Statement::ENTRY_QUERY => str_replace('%filter%', $filter, $aql),
-                Statement::ENTRY_BINDVARS => array_merge(
-                    [
-                        '@collection' => $this->eventStreamsCollection,
-                        'offset' => $offset,
-                        'limit' => $limit,
-                    ],
-                    $values
-                ),
-                Cursor::ENTRY_FLAT => true,
+
+        $cursor = $this->connection->query(
+            Vpack::fromArray(
+                [
+                    Statement::ENTRY_QUERY => str_replace('%filter%', $filter, $aql),
+                    Statement::ENTRY_BINDVARS => array_merge(
+                        [
+                            '@collection' => $this->eventStreamsCollection,
+                            'offset' => $offset,
+                            'limit' => $limit,
+                        ],
+                        $values
+                    ),
+                    Statement::ENTRY_BATCHSIZE => 1000,
+                ]
+            ),
+            [
+                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
             ]
         );
 
         $streamNames = [];
+        $cursor->rewind();
 
-        foreach ($statement->execute() as $streamName) {
-            $streamNames[] = new StreamName($streamName['real_stream_name']);
+        while ($cursor->valid()) {
+            $streamNames[] = new StreamName($cursor->current()['real_stream_name']);
+            $cursor->next();
         }
 
         return $streamNames;
@@ -377,25 +507,32 @@ RETURN {
     "category": category
 }
 EOF;
-        $statement = new Statement(
-            $this->connection, [
-                Statement::ENTRY_QUERY => str_replace('%filter%', $filter, $aql),
-                Statement::ENTRY_BINDVARS => array_merge(
-                    [
-                        '@collection' => $this->eventStreamsCollection,
-                        'offset' => $offset,
-                        'limit' => $limit,
-                    ],
-                    $values
-                ),
-                Cursor::ENTRY_FLAT => true,
-            ]
-        );
-
         $categories = [];
 
-        foreach ($statement->execute() as $data) {
-            $categories[] = $data['category'];
+        $cursor = $this->connection->query(
+            Vpack::fromArray(
+                [
+                    Statement::ENTRY_QUERY => str_replace('%filter%', $filter, $aql),
+                    Statement::ENTRY_BINDVARS => array_merge(
+                        [
+                            '@collection' => $this->eventStreamsCollection,
+                            'offset' => $offset,
+                            'limit' => $limit,
+                        ],
+                        $values
+                    ),
+                    Statement::ENTRY_BATCHSIZE => 1000,
+                ]
+            ),
+            [
+                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
+            ]
+        );
+        $cursor->rewind();
+
+        while ($cursor->valid()) {
+            $categories[] = new StreamName($cursor->current()['category']);
+            $cursor->next();
         }
 
         return $categories;
@@ -411,19 +548,22 @@ FOR c IN @@collection
     }
 EOF;
 
-        $statement = new Statement(
-            $this->connection, [
-                Statement::ENTRY_QUERY => $aql,
-                Statement::ENTRY_BINDVARS => [
-                    '@collection' => $this->eventStreamsCollection,
-                    'real_stream_name' => $streamName->toString(),
-                ],
-                Cursor::ENTRY_FLAT => true,
+        $cursor = $this->connection->query(
+            Vpack::fromArray(
+                [
+                    Statement::ENTRY_QUERY => $aql,
+                    Statement::ENTRY_BINDVARS => [
+                        '@collection' => $this->eventStreamsCollection,
+                        'real_stream_name' => $streamName->toString(),
+                    ],
+                ]
+            ),
+            [
+                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
             ]
         );
 
-        $cursor = $statement->execute();
-
+        $cursor->rewind();
         if (false === $cursor->valid() || ($stream = $cursor->current()) === null) {
             throw StreamNotFound::with($streamName);
         }
@@ -442,18 +582,21 @@ FOR c IN @@collection
     }
 EOF;
 
-        $statement = new Statement(
-            $this->connection, [
-                Statement::ENTRY_QUERY => $aql,
-                Statement::ENTRY_BINDVARS => [
-                    '@collection' => $this->eventStreamsCollection,
-                    'real_stream_name' => $streamName->toString(),
-                ],
-                Cursor::ENTRY_FLAT => true,
+        $cursor = $this->connection->query(
+            Vpack::fromArray(
+                [
+                    Statement::ENTRY_QUERY => $aql,
+                    Statement::ENTRY_BINDVARS => [
+                        '@collection' => $this->eventStreamsCollection,
+                        'real_stream_name' => $streamName->toString(),
+                    ],
+                ]
+            ),
+            [
+                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
             ]
         );
-
-        $cursor = $statement->execute();
+        $cursor->rewind();
 
         return 1 === ($cursor->current()['number'] ?? 0);
     }
@@ -566,5 +709,105 @@ EOF;
             $where,
             $values,
         ];
+    }
+
+    public function beginTransaction(): void
+    {
+        if ($this->disableTransactionHandling) {
+            return;
+        }
+
+        if ($this->inTransaction) {
+            throw new TransactionAlreadyStarted();
+        }
+        $this->inTransaction = true;
+    }
+
+    public function commit(): void
+    {
+        if ($this->disableTransactionHandling) {
+            return;
+        }
+        if (!$this->inTransaction) {
+            throw new TransactionNotStarted();
+        }
+
+        try {
+            if (!empty($this->nonTransactionActions)) {
+                foreach ($this->nonTransactionActions as $type) {
+                    $item = $type->toHttp();
+                    $this->connection->{$item[0]}(
+                        $item[1],
+                        Vpack::fromArray($item[2]),
+                        $item[3]
+                    );
+                }
+            }
+
+            $response = $this->connection->post(
+                Urls::URL_TRANSACTION,
+                Vpack::fromArray(
+                        [
+                            'collections' => [
+                                'write' => array_keys(array_flip($this->writeCollections)),
+                            ],
+                            'action' => "function () {var db = require('@arangodb').db;" . $this->actions
+                                . 'return {' . implode(',', $this->results) .'}}',
+                        ]
+                ));
+            if (!empty($this->guards)) {
+                array_walk($this->guards, function($guard) use ($response) {
+                    $guard($response);
+                });
+            }
+            $this->inTransaction = false;
+            $this->nonTransactionActions = [];
+            $this->results = [];
+            $this->guards = [];
+            $this->resultId = -1;
+        } catch (RequestFailedException $e) {
+            throw RuntimeException::fromServerException($e);
+        }
+    }
+
+    public function rollback(): void
+    {
+        if ($this->disableTransactionHandling) {
+            return;
+        }
+        if (!$this->inTransaction) {
+            throw new TransactionNotStarted();
+        }
+
+        $this->inTransaction = false;
+        $this->nonTransactionActions = [];
+        $this->results = [];
+        $this->guards = [];
+        $this->resultId = -1;
+    }
+
+    public function inTransaction(): bool
+    {
+        return $this->inTransaction;
+    }
+
+    /**
+     * @throws \Exception
+     *
+     * @return mixed
+     */
+    public function transactional(callable $callable)
+    {
+        $this->beginTransaction();
+
+        try {
+            $result = $callable($this);
+            $this->commit();
+        } catch (\Throwable $e) {
+            $this->rollback();
+            throw $e;
+        }
+
+        return $result ?: true;
     }
 }

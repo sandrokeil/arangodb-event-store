@@ -12,14 +12,13 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb;
 
-use ArangoDBClient\Cursor;
+use ArangoDb\Cursor;
 use DateTimeImmutable;
 use DateTimeZone;
-use IteratorIterator;
 use Prooph\Common\Messaging\Message;
 use Prooph\Common\Messaging\MessageFactory;
 
-final class StreamIterator extends IteratorIterator implements \Countable
+final class StreamIterator implements \Countable, \Iterator
 {
     /**
      * @var MessageFactory
@@ -33,23 +32,30 @@ final class StreamIterator extends IteratorIterator implements \Countable
      */
     private $positionOffset;
 
+    /**
+     * @var Cursor
+     */
+    private $cursor;
+
     public function __construct(
         Cursor $cursor,
         int $positionOffset,
         MessageFactory $messageFactory
     ) {
-        parent::__construct($cursor);
+        $this->cursor = $cursor;
+        $this->cursor->rewind();
         $this->positionOffset = $positionOffset;
         $this->messageFactory = $messageFactory;
     }
 
     public function current(): ?Message
     {
-        $data = $this->getInnerIterator()->current();
+        $data = $this->cursor->current();
 
         if ($data === null) {
             return null;
         }
+        $data = json_decode($data, true);
 
         $createdAt = $data['created_at'];
 
@@ -80,6 +86,26 @@ final class StreamIterator extends IteratorIterator implements \Countable
 
     public function count()
     {
-        return $this->getInnerIterator()->getCount();
+        return $this->cursor->count();
+    }
+
+    public function next()
+    {
+        $this->cursor->next();
+    }
+
+    public function key()
+    {
+        return $this->cursor->key();
+    }
+
+    public function valid()
+    {
+        return $this->cursor->valid();
+    }
+
+    public function rewind()
+    {
+        $this->cursor->rewind();
     }
 }

@@ -21,7 +21,6 @@ use ProophTest\EventStore\Mock\UserCreated;
 require __DIR__ . '/../../vendor/autoload.php';
 
 $connection = TestUtil::getClient();
-TestUtil::setupCollections($connection);
 
 $eventStore = new EventStore(
     new FQCNMessageFactory(),

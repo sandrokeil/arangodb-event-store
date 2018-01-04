@@ -4,14 +4,12 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Projection;
 
+use ArangoDb\RequestFailedException;
+use ArangoDb\Vpack;
 use ArangoDBClient\Collection;
-use ArangoDBClient\Connection;
-use function Prooph\EventStore\ArangoDb\Fn\execute;
-use Prooph\EventStore\ArangoDb\Type\CreateCollection;
-use Prooph\EventStore\ArangoDb\Type\DeleteCollection;
-use Prooph\EventStore\ArangoDb\Type\InsertDocument;
-use Prooph\EventStore\ArangoDb\Type\ReadCollection;
-use Prooph\EventStore\ArangoDb\Type\TruncateCollection;
+use ArangoDb\Connection;
+use ArangoDBClient\Urls;
+use Prooph\EventStore\ArangoDb\Exception\RuntimeException;
 use Prooph\EventStore\Projection\ReadModel;
 
 class EdgeReadModel implements ReadModel
@@ -38,31 +36,32 @@ class EdgeReadModel implements ReadModel
 
     public function init(): void
     {
-        execute(
-            $this->connection,
-            [
-            ],
-            CreateCollection::with(
-                $this->collectionName,
-                [
-                    'keyOptions' => [
-                        'allowUserKeys' => true,
-                    ],
-                    'type' => Collection::TYPE_EDGE,
-                ]
-            )
-        );
+        try {
+            $this->connection->post(
+                Urls::URL_COLLECTION,
+                Vpack::fromArray(
+                    [
+                        'name' => $this->collectionName,
+                        'keyOptions' => [
+                            'allowUserKeys' => true,
+                        ],
+                        'type' => Collection::TYPE_EDGE,
+                    ]
+                ),
+                ['silent' => true]
+            );
+        } catch (RequestFailedException $e) {
+            throw RuntimeException::fromServerException($e);
+        }
     }
 
     public function isInitialized(): bool
     {
         try {
-            execute(
-                $this->connection,
-                [],
-                ReadCollection::with($this->collectionName)
+            $this->connection->get(
+                Urls::URL_COLLECTION . '/' . $this->collectionName
             );
-        } catch (\Throwable $e) {
+        } catch (RequestFailedException $e) {
             return false;
         }
         return true;
@@ -70,37 +69,38 @@ class EdgeReadModel implements ReadModel
 
     public function reset(): void
     {
-        execute(
-            $this->connection,
-            [],
-            TruncateCollection::with($this->collectionName)
-        );
+        try {
+            $this->connection->put(
+                Urls::URL_COLLECTION . '/' . $this->collectionName . '/truncate'
+            );
+        } catch (RequestFailedException $e) {
+            throw RuntimeException::fromServerException($e);
+        }
     }
 
-    protected function insert(array $data)
+    protected function insert(array $data): void
     {
         try {
-            execute(
-                $this->connection,
-                [],
-                InsertDocument::with($this->collectionName, [$data])
+            $this->connection->post(
+                Urls::URL_DOCUMENT . '/' . $this->collectionName,
+                Vpack::fromArray([
+                    $data,
+                ]),
+                ['silent' => true]
             );
-        } catch (\Throwable $e) {
-            return false;
+        } catch (RequestFailedException $e) {
+            throw RuntimeException::fromServerException($e);
         }
     }
 
     public function delete(): void
     {
         try {
-            execute(
-                $this->connection,
-                [
-                ],
-                DeleteCollection::with($this->collectionName)
+            $this->connection->delete(
+                Urls::URL_DOCUMENT . '/' . $this->collectionName
             );
-        } catch (\Throwable $e) {
-
+        } catch (RequestFailedException $e) {
+            // ignore
         }
     }
 

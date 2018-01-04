@@ -12,18 +12,21 @@ declare(strict_types=1);
 
 namespace ProophTest\EventStore\ArangoDb;
 
-use ArangoDBClient\Connection;
-use ArangoDBClient\ConnectionOptions;
-use ArangoDBClient\UpdatePolicy;
+use ArangoDb\Connection;
+use ArangoDb\RequestFailedException;
+use ArangoDb\Vpack;
 use ArangoDBClient\Urls;
 use function Prooph\EventStore\ArangoDb\Fn\eventStreamsBatch;
+use function Prooph\EventStore\ArangoDb\Fn\execute;
 use function Prooph\EventStore\ArangoDb\Fn\projectionsBatch;
 
 final class TestUtil
 {
     public static function getClient(): Connection
     {
-        return new Connection(self::getConnectionParams());
+        $connection = new Connection(self::getConnectionParams());
+        $connection->connect();
+        return $connection;
     }
 
     public static function getDatabaseName(): string
@@ -46,15 +49,15 @@ final class TestUtil
 
     public static function setupCollections(Connection $connection): void
     {
-        eventStreamsBatch($connection)->process();
-        projectionsBatch($connection)->process();
+        execute($connection, null, ...eventStreamsBatch());
+        execute($connection, null, ...projectionsBatch());
     }
 
     public static function deleteCollection(Connection $connection, string $collection): void
     {
         try {
             $connection->delete(Urls::URL_COLLECTION . '/' . $collection);
-        } catch (\ArangoDBClient\ServerException $e) {
+        } catch (RequestFailedException $e) {
             // needed if test deletes collection
         }
     }
@@ -74,16 +77,9 @@ final class TestUtil
     private static function getSpecifiedConnectionParams(): array
     {
         return [
-            ConnectionOptions::OPTION_AUTH_TYPE => 'Basic',
-            ConnectionOptions::OPTION_CONNECTION => 'Close',
-            ConnectionOptions::OPTION_TIMEOUT => 3,
-            ConnectionOptions::OPTION_RECONNECT => false,
-            ConnectionOptions::OPTION_CREATE => false,
-            ConnectionOptions::OPTION_UPDATE_POLICY => UpdatePolicy::LAST,
-            ConnectionOptions::OPTION_AUTH_USER => getenv('arangodb_username'),
-            ConnectionOptions::OPTION_AUTH_PASSWD => getenv('arangodb_password'),
-            ConnectionOptions::OPTION_ENDPOINT => getenv('arangodb_host'),
-            ConnectionOptions::OPTION_DATABASE => getenv('arangodb_dbname'),
+            Connection::HOST => getenv('arangodb_host'),
+            Connection::MAX_CHUNK_SIZE => 64,
+            Connection::VST_VERSION => Connection::VST_VERSION_11,
         ];
     }
 }

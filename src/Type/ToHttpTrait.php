@@ -12,19 +12,14 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Type;
 
+use ArangoDb\Request;
+
 trait ToHttpTrait
 {
     private $httpProtocol = 'HTTP/1.1';
 
     protected function buildAppendBatch(string $method, string $url, array $data, array $queryParams = []): array
     {
-        $request = $method . ' ' . $url;
-
-        if (! empty($queryParams)) {
-            $request .= '?' . http_build_query($queryParams);
-        }
-        $request .= ' ' . $this->httpProtocol . "\n\n" . json_encode($data);
-
-        return [$method, $request];
+        return [\strtolower($method), $url, $data, $queryParams];
     }
 }
