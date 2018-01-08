@@ -34,5 +34,7 @@ Execute tests with
 
 ```
 $ docker-compose run --rm php vendor/bin/phpunit
+
+$ docker-compose run --rm php-polyfill vendor/bin/phpunit
 ```
 

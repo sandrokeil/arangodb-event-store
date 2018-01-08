@@ -23,7 +23,7 @@
     "require": {
         "php": "^7.1",
         "prooph/event-store": "^7.2",
-        "triagens/arangodb": "^3.2",
+        "triagens/arangodb": "^3.3",
         "prooph/standard-projections": "^1.0"
     },
     "require-dev": {
