@@ -37,7 +37,6 @@ function executeInTransaction(Connection $connection, ?array $onError, Type\Type
     try {
         $response = $connection->post(
             Urls::URL_TRANSACTION,
-            Vpack::fromArray(
                 [
                     'collections' => [
                         'write' => array_unique($collections),
@@ -45,7 +44,6 @@ function executeInTransaction(Connection $connection, ?array $onError, Type\Type
                     'action' => sprintf("function () {var db = require('@arangodb').db;%s return {%s}}", $actions,
                         implode(',', $return)),
                 ]
-            )
         );
     } catch (\Throwable $e) {
         $error = $e->getCode();
@@ -70,7 +68,7 @@ function execute(Connection $connection, ?array $onError, Type\Type ...$batches)
             foreach ($type->toHttp() as $item) {
                 $response = $connection->{$item[0]}(
                     $item[1],
-                    Vpack::fromArray($item[2]),
+                    $item[2],
                     $item[3]
                 );
                 checkResponse($response, $onError[$key] ?? null, $type);
@@ -81,7 +79,7 @@ function execute(Connection $connection, ?array $onError, Type\Type ...$batches)
 
         $response = $connection->{$item[0]}(
             $item[1],
-            Vpack::fromArray($item[2]),
+            $item[2],
             $item[3]
         );
         checkResponse($response, $onError[$key] ?? null, $type);
