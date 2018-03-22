@@ -56,7 +56,7 @@ final class TestUtil
     public static function deleteCollection(Connection $connection, string $collection): void
     {
         try {
-            $connection->delete(Urls::URL_COLLECTION . '/' . $collection);
+            $connection->delete(Urls::URL_COLLECTION . '/' . $collection, []);
         } catch (RequestFailedException $e) {
             // needed if test deletes collection
         }
@@ -77,9 +77,8 @@ final class TestUtil
     private static function getSpecifiedConnectionParams(): array
     {
         return [
-            Connection::HOST => getenv('arangodb_host'),
-            Connection::MAX_CHUNK_SIZE => 64,
-            Connection::VST_VERSION => Connection::VST_VERSION_11,
+            Connection::HOST => getenv('arangodb_host')
+            // TODO connection options ?
         ];
     }
 }

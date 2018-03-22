@@ -307,13 +307,12 @@ final class ReadModelProjector implements ProophReadModelProjector
         try {
             $this->connection->patch(
                 Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name,
-                Vpack::fromArray(
                     [
                         'state' => $this->state,
                         'status' => ProjectionStatus::STOPPING()->getValue(),
                         'position' => $this->streamPositions,
                     ]
-                ),
+                ,
                 [
                     'silent' => true,
                     'mergeObjects' => false,
@@ -334,11 +333,10 @@ final class ReadModelProjector implements ProophReadModelProjector
         try {
             $this->connection->patch(
                 Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name,
-                Vpack::fromArray(
                     [
                         'status' => ProjectionStatus::IDLE()->getValue(),
                     ]
-                ),
+                ,
                 ['silent' => true]
             );
         } catch (RequestFailedException $e) {
@@ -356,9 +354,7 @@ final class ReadModelProjector implements ProophReadModelProjector
         try {
             $this->connection->delete(
                 Urls::URL_DOCUMENT . '/' . $this->projectionsTable,
-                Vpack::fromArray(
                     [$this->name]
-                )
             );
         } catch (RequestFailedException $e) {
             // ignore
@@ -667,7 +663,7 @@ final class ReadModelProjector implements ProophReadModelProjector
         try {
             $this->connection->post(
                 Urls::URL_DOCUMENT . '/' . $this->projectionsTable,
-                Vpack::fromArray([
+                [
                     [
                         '_key' => $this->name,
                         'position' => (object)null,
@@ -675,7 +671,7 @@ final class ReadModelProjector implements ProophReadModelProjector
                         'status' => $this->status->getValue(),
                         'locked_until' => null,
                     ],
-                ]),
+                ],
                 ['silent' => true]
             );
         } catch (RequestFailedException $e) {
@@ -708,7 +704,6 @@ RETURN NEW
 EOF;
 
         $cursor = $this->connection->query(
-            Vpack::fromArray(
                 [
                     Statement::ENTRY_QUERY => $aql,
                     Statement::ENTRY_BINDVARS => [
@@ -720,7 +715,7 @@ EOF;
                     ],
                     Statement::ENTRY_BATCHSIZE => 1000,
                 ]
-            ),
+            ,
             [
                 Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
             ]
@@ -750,11 +745,10 @@ EOF;
         try {
             $this->connection->patch(
                 Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name,
-                Vpack::fromArray(
                     [
                         'locked_until' => $lockUntilString,
                     ]
-                ),
+                ,
                 ['silent' => true]
             );
         } catch (RequestFailedException $e) {
@@ -770,12 +764,11 @@ EOF;
         try {
             $this->connection->patch(
                 Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name,
-                Vpack::fromArray(
                     [
                         'status' => ProjectionStatus::IDLE()->getValue(),
                         'locked_until' => null,
                     ]
-                ),
+                ,
                 ['silent' => true]
             );
         } catch (RequestFailedException $e) {
@@ -799,13 +792,12 @@ EOF;
         try {
             $this->connection->patch(
                 Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name,
-                Vpack::fromArray(
                     [
                         'position' => $this->streamPositions,
                         'state' => $this->state,
                         'locked_until' => $lockUntilString,
                     ]
-                ),
+                ,
                 [
                     'silent' => true,
                     'mergeObjects' => false,
@@ -833,7 +825,6 @@ RETURN {
 EOF;
 
             $cursor = $this->connection->query(
-                Vpack::fromArray(
                     [
                         Statement::ENTRY_QUERY => $aql,
                         Statement::ENTRY_BINDVARS => [
@@ -841,7 +832,7 @@ EOF;
                         ],
                         Statement::ENTRY_BATCHSIZE => 1000,
                     ]
-                ),
+                ,
                 [
                     Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
                 ]
@@ -869,7 +860,6 @@ RETURN {
 EOF;
 
             $cursor = $this->connection->query(
-                Vpack::fromArray(
                     [
                         Statement::ENTRY_QUERY => $aql,
                         Statement::ENTRY_BINDVARS => [
@@ -878,7 +868,7 @@ EOF;
                         ],
                         Statement::ENTRY_BATCHSIZE => 1000,
                     ]
-                ),
+                ,
                 [
                     Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
                 ]

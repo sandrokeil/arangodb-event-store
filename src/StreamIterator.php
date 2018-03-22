@@ -43,7 +43,7 @@ final class StreamIterator implements \Countable, \Iterator
         MessageFactory $messageFactory
     ) {
         $this->cursor = $cursor;
-        $this->cursor->rewind();
+//        $this->cursor->rewind();
         $this->positionOffset = $positionOffset;
         $this->messageFactory = $messageFactory;
     }

@@ -177,14 +177,14 @@ final class EventStore implements ProophEventStore, TransactionalEventStore
                     $item = $type->toHttp();
                     $this->connection->{$item[0]}(
                         $item[1],
-                        Vpack::fromArray($item[2]),
+                        $item[2],
                         $item[3]
                     );
                 }
                 $this->connection->post(
                     Urls::URL_DOCUMENT . '/' .  $this->eventStreamsCollection,
-                    Vpack::fromArray($this->createEventStreamData($stream)),
-                    ['silent' => true]
+                    $this->createEventStreamData($stream)
+//                    ['silent' => true]
                 );
                 $this->appendTo($streamName, $stream->streamEvents());
             } catch (RequestFailedException $e) {
@@ -225,8 +225,8 @@ final class EventStore implements ProophEventStore, TransactionalEventStore
             try {
                 $this->connection->post(
                     Urls::URL_DOCUMENT . '/' . $collectionName,
-                    Vpack::fromArray($data),
-                    ['silent' => true]
+                    $data
+//                    ['silent' => true]
                 );
             } catch (RequestFailedException $e) {
                 if ($e->getHttpCode() === 404) {
@@ -259,12 +259,12 @@ final class EventStore implements ProophEventStore, TransactionalEventStore
 
             $response = $this->connection->put(
                 Urls::URL_REMOVE_BY_EXAMPLE,
-                Vpack::fromArray(
+
                     [
                         'collection' => $this->eventStreamsCollection,
                         'example' => ['real_stream_name' => $streamName->toString()],
                     ]
-                )
+
             );
 
             if (strpos($response->getBody(), '"deleted":0') !== false) {
@@ -339,7 +339,6 @@ EOF;
         $collectionName = $this->persistenceStrategy->generateCollectionName($streamName);
 
         $cursor = $this->connection->query(
-            Vpack::fromArray(
                 [
                     Statement::ENTRY_QUERY => str_replace(
                         ['%DIR%', '%op%', '%filter%'],
@@ -354,8 +353,7 @@ EOF;
                         ],
                         $values),
                     Statement::ENTRY_BATCHSIZE => 1000,
-                ]
-            ),
+                ],
             [
                 Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_JSON,
             ]
@@ -430,7 +428,7 @@ RETURN {
 EOF;
 
         $cursor = $this->connection->query(
-            Vpack::fromArray(
+
                 [
                     Statement::ENTRY_QUERY => str_replace('%filter%', $filter, $aql),
                     Statement::ENTRY_BINDVARS => array_merge(
@@ -442,8 +440,7 @@ EOF;
                         $values
                     ),
                     Statement::ENTRY_BATCHSIZE => 1000,
-                ]
-            ),
+                ],
             [
                 Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
             ]
@@ -510,7 +507,6 @@ EOF;
         $categories = [];
 
         $cursor = $this->connection->query(
-            Vpack::fromArray(
                 [
                     Statement::ENTRY_QUERY => str_replace('%filter%', $filter, $aql),
                     Statement::ENTRY_BINDVARS => array_merge(
@@ -523,7 +519,7 @@ EOF;
                     ),
                     Statement::ENTRY_BATCHSIZE => 1000,
                 ]
-            ),
+            ,
             [
                 Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
             ]
@@ -549,7 +545,6 @@ FOR c IN @@collection
 EOF;
 
         $cursor = $this->connection->query(
-            Vpack::fromArray(
                 [
                     Statement::ENTRY_QUERY => $aql,
                     Statement::ENTRY_BINDVARS => [
@@ -557,7 +552,7 @@ EOF;
                         'real_stream_name' => $streamName->toString(),
                     ],
                 ]
-            ),
+            ,
             [
                 Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
             ]
@@ -583,7 +578,6 @@ FOR c IN @@collection
 EOF;
 
         $cursor = $this->connection->query(
-            Vpack::fromArray(
                 [
                     Statement::ENTRY_QUERY => $aql,
                     Statement::ENTRY_BINDVARS => [
@@ -591,7 +585,7 @@ EOF;
                         'real_stream_name' => $streamName->toString(),
                     ],
                 ]
-            ),
+            ,
             [
                 Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
             ]
@@ -738,7 +732,7 @@ EOF;
                     $item = $type->toHttp();
                     $this->connection->{$item[0]}(
                         $item[1],
-                        Vpack::fromArray($item[2]),
+                        $item[2],
                         $item[3]
                     );
                 }
@@ -746,7 +740,6 @@ EOF;
 
             $response = $this->connection->post(
                 Urls::URL_TRANSACTION,
-                Vpack::fromArray(
                         [
                             'collections' => [
                                 'write' => array_keys(array_flip($this->writeCollections)),
@@ -754,7 +747,7 @@ EOF;
                             'action' => "function () {var db = require('@arangodb').db;" . $this->actions
                                 . 'return {' . implode(',', $this->results) .'}}',
                         ]
-                ));
+                );
             if (!empty($this->guards)) {
                 array_walk($this->guards, function($guard) use ($response) {
                     $guard($response);

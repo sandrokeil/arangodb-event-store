@@ -126,9 +126,8 @@ final class ProjectionManager implements ProophProjectionManager
         try {
             $this->connection->patch(
                 Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $name,
-                Vpack::fromArray(
                     ['status' => $status]
-                ),
+                ,
                 ['silent' => true]
             );
         } catch (RequestFailedException $e) {
@@ -144,9 +143,7 @@ final class ProjectionManager implements ProophProjectionManager
         try {
             $this->connection->patch(
                 Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $name,
-                Vpack::fromArray(
-                    ['status' => ProjectionStatus::RESETTING()->getValue()]
-                ),
+                    ['status' => ProjectionStatus::RESETTING()->getValue()],
                 ['silent' => true]
             );
         } catch (RequestFailedException $e) {
@@ -162,9 +159,8 @@ final class ProjectionManager implements ProophProjectionManager
         try {
             $this->connection->patch(
                 Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $name,
-                Vpack::fromArray(
                     ['status' => ProjectionStatus::STOPPING()->getValue()]
-                ),
+                ,
                 ['silent' => true]
             );
         } catch (RequestFailedException $e) {
@@ -233,7 +229,6 @@ RETURN {
 }
 EOF;
         $cursor = $this->connection->query(
-            Vpack::fromArray(
                 [
                     Statement::ENTRY_QUERY => str_replace('%filter%', $filter, $aql),
                     Statement::ENTRY_BINDVARS => array_merge(
@@ -245,8 +240,7 @@ EOF;
                         $values
                     ),
                     Statement::ENTRY_BATCHSIZE => 100,
-                ]
-            ),
+                ],
             [
                 Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
             ]
