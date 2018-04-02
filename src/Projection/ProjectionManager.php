@@ -228,7 +228,8 @@ RETURN {
     "name": c._key
 }
 EOF;
-        $cursor = $this->connection->query(
+        try {
+            $cursor = $this->connection->query(
                 [
                     Statement::ENTRY_QUERY => str_replace('%filter%', $filter, $aql),
                     Statement::ENTRY_BINDVARS => array_merge(
@@ -241,14 +242,13 @@ EOF;
                     ),
                     Statement::ENTRY_BATCHSIZE => 100,
                 ],
-            [
-                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
-            ]
-        );
+                [
+                    Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
+                ]
+            );
 
-        $projectionNames = [];
+            $projectionNames = [];
 
-        try {
             $cursor->rewind();
             while ($cursor->valid()) {
                 $projectionNames[] = $cursor->current()['name'];

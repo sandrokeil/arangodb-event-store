@@ -338,7 +338,8 @@ RETURN {
 EOF;
         $collectionName = $this->persistenceStrategy->generateCollectionName($streamName);
 
-        $cursor = $this->connection->query(
+        try {
+            $cursor = $this->connection->query(
                 [
                     Statement::ENTRY_QUERY => str_replace(
                         ['%DIR%', '%op%', '%filter%'],
@@ -354,21 +355,21 @@ EOF;
                         $values),
                     Statement::ENTRY_BATCHSIZE => 1000,
                 ],
-            [
-                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_JSON,
-            ]
-        );
+                [
+                    Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_JSON,
+                ]
+            );
 
-        try {
             return new StreamIterator(
                 $cursor,
                 $this->persistenceStrategy->offsetNumber(),
                 $this->messageFactory
             );
-        } catch (\Throwable $e) {
-            if ($cursor->getResponse()->getHttpCode() === 404) {
+        } catch (RequestFailedException $e) {
+            if ($e->getHttpCode() === 404) {
                 throw StreamNotFound::with($streamName);
             }
+
             throw $e;
         }
     }
