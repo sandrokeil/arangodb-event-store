@@ -736,7 +736,8 @@ IN @@collection
 RETURN NEW
 EOF;
 
-        $cursor = $this->connection->query(
+        try {
+            $cursor = $this->connection->query(
                 [
                     Statement::ENTRY_QUERY => $aql,
                     Statement::ENTRY_BINDVARS => [
@@ -747,14 +748,12 @@ EOF;
                         'status' => ProjectionStatus::RUNNING()->getValue(),
                     ],
                     Statement::ENTRY_BATCHSIZE => 1,
+                ],
+                [
+                    Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
                 ]
-            ,
-            [
-                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
-            ]
-        );
+            );
 
-        try {
             $cursor->rewind();
             if ($cursor->count() === 0) {
                 throw new Exception\RuntimeException('Another projection process is already running');
