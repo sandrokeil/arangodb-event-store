@@ -77,8 +77,9 @@ final class TestUtil
     private static function getSpecifiedConnectionParams(): array
     {
         return [
-            Connection::HOST => getenv('arangodb_host')
-            // TODO connection options ?
+            Connection::HOST => getenv('arangodb_host'),
+            Connection::MAX_CHUNK_SIZE => 64,
+            Connection::VST_VERSION => Connection::VST_VERSION_11,
         ];
     }
 }

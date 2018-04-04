@@ -183,8 +183,8 @@ final class EventStore implements ProophEventStore, TransactionalEventStore
                 }
                 $this->connection->post(
                     Urls::URL_DOCUMENT . '/' .  $this->eventStreamsCollection,
-                    $this->createEventStreamData($stream)
-//                    ['silent' => true]
+                    $this->createEventStreamData($stream),
+                    ['silent' => true]
                 );
                 $this->appendTo($streamName, $stream->streamEvents());
             } catch (RequestFailedException $e) {
@@ -225,8 +225,8 @@ final class EventStore implements ProophEventStore, TransactionalEventStore
             try {
                 $this->connection->post(
                     Urls::URL_DOCUMENT . '/' . $collectionName,
-                    $data
-//                    ['silent' => true]
+                    $data,
+                    ['silent' => true]
                 );
             } catch (RequestFailedException $e) {
                 if ($e->getHttpCode() === 404) {
