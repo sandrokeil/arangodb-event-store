@@ -139,7 +139,7 @@ final class EventStore implements ProophEventStore, TransactionalEventStore
                 . '{"mergeObjects": false}'
                 . ');';
             $rId = 'rId' . $this->resultId;
-            $this->results[] .= $rId;
+            $this->results[] = $rId;
 
             $this->guards[] = function (Response $response) use ($rId, $streamName) {
                 if (strpos($response->getBody(), '"' . $rId . '"' . ':0') !== false) {
@@ -205,7 +205,7 @@ final class EventStore implements ProophEventStore, TransactionalEventStore
             . '.insert(' . json_encode([$this->createEventStreamData($stream)])
             . ', {"silent":true});';
 
-        $this->results[] .= 'rId' . $this->resultId;
+        $this->results[] = 'rId' . $this->resultId;
         $this->writeCollections[] = $this->eventStreamsCollection;
 
         $this->appendTo($streamName, $stream->streamEvents());
@@ -247,7 +247,7 @@ final class EventStore implements ProophEventStore, TransactionalEventStore
         $this->actions .= 'var rId' . ++$this->resultId . ' = db.' . $collectionName
             . '.insert(' . $data
             . ', {"silent":true});';
-        $this->results[] .= 'rId' . $this->resultId;
+        $this->results[] = 'rId' . $this->resultId;
     }
 
     public function delete(StreamName $streamName): void
@@ -760,6 +760,7 @@ EOF;
                     $guard($response);
                 });
             }
+            $this->actions = '';
             $this->inTransaction = false;
             $this->nonTransactionActions = [];
             $this->results = [];
@@ -778,7 +779,7 @@ EOF;
         if (!$this->inTransaction) {
             throw new TransactionNotStarted();
         }
-
+        $this->actions = '';
         $this->inTransaction = false;
         $this->nonTransactionActions = [];
         $this->results = [];
