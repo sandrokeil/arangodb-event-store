@@ -10,17 +10,12 @@
 
 declare(strict_types=1);
 
-namespace Prooph\EventStore\ArangoDb\Type;
+namespace Prooph\EventStore\ArangoDb\Container;
 
-use ArangoDb\Response;
-
-interface Type
+final class TransactionalArangoDbEventStoreFactory extends EventStoreFactory
 {
-    public function toHttp(): iterable;
-
-    public function toJs(): string;
-
-    public function collectionName(): string;
-
-    public function checkResponse(Response $response, string $rId = null): ?int;
+    protected function type()
+    {
+        return 'transactional';
+    }
 }

@@ -22,7 +22,7 @@ use Prooph\EventStore\EventStore;
 use Prooph\EventStore\Projection\ProjectionManager as ProophProjectionManager;
 use Psr\Container\ContainerInterface;
 
-class ProjectionManagerFactory implements
+final class ProjectionManagerFactory implements
     ProvidesDefaultOptions,
     RequiresConfigId,
     RequiresMandatoryOptions
@@ -50,7 +50,7 @@ class ProjectionManagerFactory implements
     {
         if (! isset($arguments[0]) || ! $arguments[0] instanceof ContainerInterface) {
             throw new InvalidArgumentException(
-                sprintf('The first argument must be of type %s', ContainerInterface::class)
+                \sprintf('The first argument must be of type %s', ContainerInterface::class)
             );
         }
 

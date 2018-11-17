@@ -12,13 +12,13 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb;
 
-use ArangoDb\Cursor;
+use ArangoDb\Statement;
 use DateTimeImmutable;
 use DateTimeZone;
 use Prooph\Common\Messaging\Message;
 use Prooph\Common\Messaging\MessageFactory;
 
-final class StreamIterator implements \Countable, \Iterator
+final class StreamIterator implements \Prooph\EventStore\StreamIterator\StreamIterator
 {
     /**
      * @var MessageFactory
@@ -33,12 +33,22 @@ final class StreamIterator implements \Countable, \Iterator
     private $positionOffset;
 
     /**
-     * @var Cursor
+     * @var Statement
      */
     private $cursor;
 
+    /**
+     * @var mixed
+     */
+    private $currentItem;
+
+    /**
+     * @var int
+     */
+    private $currentKey = -1;
+
     public function __construct(
-        Cursor $cursor,
+        Statement $cursor,
         int $positionOffset,
         MessageFactory $messageFactory
     ) {
@@ -50,16 +60,15 @@ final class StreamIterator implements \Countable, \Iterator
 
     public function current(): ?Message
     {
-        $data = $this->cursor->current();
+        $this->currentItem = $this->cursor->current();
 
-        if ($data === null) {
+        if ($this->currentItem === null) {
             return null;
         }
-        $data = json_decode($data, true);
+        $this->currentItem = \json_decode($this->currentItem, true);
+        $createdAt = $this->currentItem['created_at'];
 
-        $createdAt = $data['created_at'];
-
-        if (strlen($createdAt) === 19) {
+        if (\strlen($createdAt) === 19) {
             $createdAt .= '.000';
         }
 
@@ -69,17 +78,17 @@ final class StreamIterator implements \Countable, \Iterator
             new DateTimeZone('UTC')
         );
 
-        if (! isset($data['metadata']['_position'])) {
-            $data['metadata']['_position'] = ((int) $data['no']) - $this->positionOffset + 1;
+        if (! isset($this->currentItem['metadata']['_position'])) {
+            $this->currentItem['metadata']['_position'] = ((int) $this->currentItem['no']) - $this->positionOffset + 1;
         }
 
         return $this->messageFactory->createMessageFromArray(
-            $data['event_name'],
+            $this->currentItem['event_name'],
             [
-                'uuid' => $data['event_id'],
+                'uuid' => $this->currentItem['event_id'],
                 'created_at' => $createdAt,
-                'payload' => $data['payload'],
-                'metadata' => $data['metadata'],
+                'payload' => $this->currentItem['payload'],
+                'metadata' => $this->currentItem['metadata'],
             ]
         );
     }
@@ -96,16 +105,31 @@ final class StreamIterator implements \Countable, \Iterator
 
     public function key()
     {
-        return $this->cursor->key();
+        if ($this->currentItem !== null && isset($this->currentItem['no'])) {
+            return ((int) $this->currentItem['no']) - $this->positionOffset + 1;
+        }
+
+        return null;
     }
 
     public function valid()
     {
-        return $this->cursor->valid();
+        $valid = $this->cursor->valid();
+
+        if ($valid) {
+            $this->currentItem = $this->cursor->current();
+        }
+
+        return $valid;
     }
 
     public function rewind()
     {
-        $this->cursor->rewind();
+        //Only perform rewind if current item is not the first element
+        if ($this->currentKey !== 0) {
+            $this->cursor->rewind();
+            $this->currentItem = null;
+            $this->currentKey = -1;
+        }
     }
 }

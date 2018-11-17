@@ -14,8 +14,8 @@ namespace ProophTest\EventStore\ArangoDb\Container;
 
 use PHPUnit\Framework\TestCase;
 use Prooph\Common\Messaging\MessageFactory;
+use Prooph\EventStore\ArangoDb\ArangoDbEventStore;
 use Prooph\EventStore\ArangoDb\Container\ProjectionManagerFactory;
-use Prooph\EventStore\ArangoDb\EventStore;
 use Prooph\EventStore\ArangoDb\Exception\InvalidArgumentException;
 use Prooph\EventStore\ArangoDb\PersistenceStrategy;
 use Prooph\EventStore\ArangoDb\Projection\ProjectionManager;
@@ -37,16 +37,16 @@ class ProjectionManagerFactoryTest extends TestCase
             'connection' => 'my_connection',
         ];
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
 
         $container = $this->prophesize(ContainerInterface::class);
-        $eventStore = new EventStore(
+        $eventStore = new ArangoDbEventStore(
             $this->createMock(MessageFactory::class),
             TestUtil::getClient(),
             $this->createMock(PersistenceStrategy::class)
         );
 
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
         $container->get(ProophEventStore::class)->willReturn($eventStore)->shouldBeCalled();
         $container->get('config')->willReturn($config)->shouldBeCalled();
 
@@ -65,16 +65,16 @@ class ProjectionManagerFactoryTest extends TestCase
             'connection' => 'my_connection',
         ];
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
 
         $container = $this->prophesize(ContainerInterface::class);
-        $eventStore = new EventStore(
+        $eventStore = new ArangoDbEventStore(
             $this->createMock(MessageFactory::class),
             TestUtil::getClient(),
             $this->createMock(PersistenceStrategy::class)
         );
 
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
         $container->get(ProophEventStore::class)->willReturn($eventStore)->shouldBeCalled();
         $container->get('config')->willReturn($config)->shouldBeCalled();
 

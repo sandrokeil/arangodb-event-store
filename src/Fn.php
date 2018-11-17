@@ -12,99 +12,7 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Fn;
 
-use ArangoDBClient\Urls;
-use Prooph\EventStore\ArangoDb\Exception\RuntimeException;
-use Prooph\EventStore\ArangoDb\Type;
-use Prooph\EventStore\ArangoDb\Type\InsertDocument;
-
-use ArangoDb\Connection;
-use ArangoDb\Response;
-use ArangoDb\Request;
-use ArangoDb\Vpack;
-
-function executeInTransaction(Connection $connection, ?array $onError, Type\Type ...$batches): void
-{
-    $actions = '';
-    $collections = [];
-    $return = [];
-
-    foreach ($batches as $key => $type) {
-        $collections[] = $type->collectionName();
-        $actions .= str_replace('var rId', 'var rId' . $key, $type->toJs());
-        $return[] = 'rId' . $key;
-    }
-
-    try {
-        $response = $connection->post(
-            Urls::URL_TRANSACTION,
-                [
-                    'collections' => [
-                        'write' => array_unique($collections),
-                    ],
-                    'action' => sprintf("function () {var db = require('@arangodb').db;%s return {%s}}", $actions,
-                        implode(',', $return)),
-                ]
-        );
-    } catch (\Throwable $e) {
-        $error = $e->getCode();
-        if (isset($onError[0][$error]) && method_exists($onError[0][$error][0], 'with')) {
-            $args = array_slice($onError[0][$error], 1);
-            $args[] = null;
-            throw call_user_func_array($onError[0][$error][0] . '::with', $args);
-        }
-        throw RuntimeException::fromServerException($e);
-    }
-
-    foreach ($batches as $key => $batch) {
-        checkResponse($response, $onError[$key] ?? null, $batches[$key], 'rId' . $key);
-    }
-}
-
-function execute(Connection $connection, ?array $onError, Type\Type ...$batches): void
-{
-    // TODO make it async
-    foreach ($batches as $key => $type) {
-        if ($type instanceof InsertDocument) {
-            foreach ($type->toHttp() as $item) {
-                $response = $connection->{$item[0]}(
-                    $item[1],
-                    $item[2],
-                    $item[3]
-                );
-                checkResponse($response, $onError[$key] ?? null, $type);
-            }
-            continue;
-        }
-        $item = $type->toHttp();
-
-        $response = $connection->{$item[0]}(
-            $item[1],
-            $item[2],
-            $item[3]
-        );
-        checkResponse($response, $onError[$key] ?? null, $type);
-    }
-}
-
-function checkResponse(Response $response, ?array $onError, Type\Type $type, string $rId = null): void
-{
-    $httpCode = $response->getHttpCode();
-
-    if ($httpCode < 200 || $httpCode > 300) {
-        $error = $httpCode;
-    } else {
-        $error = $type->checkResponse($response, $rId);
-    }
-
-    if ($error) {
-        if (isset($onError[$error]) && method_exists($onError[$error][0], 'with')) {
-            $args = array_slice($onError[$error], 1);
-            $args[] = $response;
-            throw call_user_func_array($onError[$error][0] . '::with', $args);
-        }
-        throw RuntimeException::fromErrorResponse($response->getBody(), $type);
-    }
-}
+use ArangoDb\Type;
 
 /**
  * @return Type\Type[]
@@ -112,18 +20,16 @@ function checkResponse(Response $response, ?array $onError, Type\Type $type, str
 function eventStreamsBatch(): array
 {
     return [
-        Type\CreateCollection::with(
+        Type\Collection::create(
             'event_streams',
             [
                 'keyOptions' => [
-                    'allowUserKeys' => false,
-                    'type' => 'autoincrement',
-                    'increment' => 1,
-                    'offset' => 1,
+                    'allowUserKeys' => true,
+                    'type' => 'traditional',
                 ],
             ]
         ),
-        Type\CreateIndex::with(
+        Type\Index::create(
             'event_streams',
             [
                 'type' => 'hash',
@@ -135,7 +41,7 @@ function eventStreamsBatch(): array
                 'sparse' => false,
             ]
         ),
-        Type\CreateIndex::with(
+        Type\Index::create(
             'event_streams',
             [
                 'type' => 'skiplist',
@@ -156,7 +62,7 @@ function eventStreamsBatch(): array
 function projectionsBatch(): array
 {
     return [
-        Type\CreateCollection::with(
+        Type\Collection::create(
             'projections',
             [
                 'keyOptions' => [
@@ -164,7 +70,7 @@ function projectionsBatch(): array
                     'type' => 'traditional',
                 ],
             ]),
-        Type\CreateIndex::with(
+        Type\Index::create(
             'projections',
             [
                 'type' => 'skiplist',

@@ -10,17 +10,12 @@
 
 declare(strict_types=1);
 
-namespace Prooph\EventStore\ArangoDb\Type;
+namespace Prooph\EventStore\ArangoDb\Container;
 
-interface HasResponse
+final class ArangoDbEventStoreFactory extends EventStoreFactory
 {
-    /**
-     * @return string
-     */
-    public function rawResult(): ?string;
-
-    /**
-     * @return mixed
-     */
-    public function result();
+    protected function type()
+    {
+        return 'default';
+    }
 }

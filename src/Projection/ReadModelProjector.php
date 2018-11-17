@@ -12,15 +12,15 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Projection;
 
-use ArangoDb\Connection;
-use ArangoDb\Cursor;
-use ArangoDb\RequestFailedException;
-use ArangoDb\Vpack;
-use ArangoDBClient\Statement;
-use ArangoDBClient\Urls;
+use ArangoDb\Exception\ServerException;
+use ArangoDb\HttpHelper;
+use ArangoDb\Statement;
+use ArangoDb\Type\Cursor;
+use ArangoDb\Type\Document;
 use Closure;
 use DateTimeImmutable;
 use DateTimeZone;
+use Fig\Http\Message\StatusCodeInterface;
 use Iterator;
 use Prooph\Common\Messaging\Message;
 use Prooph\EventStore\ArangoDb\EventStore as ArangoDbEventStore;
@@ -30,10 +30,13 @@ use Prooph\EventStore\ArangoDb\Exception\RuntimeException;
 use Prooph\EventStore\EventStore;
 use Prooph\EventStore\EventStoreDecorator;
 use Prooph\EventStore\Exception;
+use Prooph\EventStore\Metadata\MetadataMatcher;
 use Prooph\EventStore\Projection\ProjectionStatus;
 use Prooph\EventStore\Projection\ReadModel;
 use Prooph\EventStore\Projection\ReadModelProjector as ProophReadModelProjector;
 use Prooph\EventStore\StreamName;
+use Psr\Http\Client\ClientExceptionInterface;
+use Psr\Http\Client\ClientInterface;
 
 final class ReadModelProjector implements ProophReadModelProjector
 {
@@ -43,9 +46,9 @@ final class ReadModelProjector implements ProophReadModelProjector
     private $eventStore;
 
     /**
-     * @var Connection
+     * @var ClientInterface
      */
-    private $connection;
+    private $client;
 
     /**
      * @var string
@@ -137,9 +140,14 @@ final class ReadModelProjector implements ProophReadModelProjector
      */
     private $query;
 
+    /**
+     * @var MetadataMatcher|null
+     */
+    private $metadataMatcher;
+
     public function __construct(
         EventStore $eventStore,
-        Connection $connection,
+        ClientInterface $client,
         string $name,
         ReadModel $readModel,
         string $eventStreamsTable,
@@ -149,12 +157,12 @@ final class ReadModelProjector implements ProophReadModelProjector
         int $sleep,
         bool $triggerPcntlSignalDispatch = false
     ) {
-        if ($triggerPcntlSignalDispatch && !extension_loaded('pcntl')) {
+        if ($triggerPcntlSignalDispatch && ! \extension_loaded('pcntl')) {
             throw Exception\ExtensionNotLoadedException::withName('pcntl');
         }
 
         $this->eventStore = $eventStore;
-        $this->connection = $connection;
+        $this->client = $client;
         $this->name = $name;
         $this->readModel = $readModel;
         $this->eventStreamsTable = $eventStreamsTable;
@@ -169,7 +177,7 @@ final class ReadModelProjector implements ProophReadModelProjector
             $eventStore = $eventStore->getInnerEventStore();
         }
 
-        if (!$eventStore instanceof ArangoDbEventStore
+        if (! $eventStore instanceof ArangoDbEventStore
         ) {
             throw new Exception\InvalidArgumentException('Unknown event store instance given');
         }
@@ -185,7 +193,7 @@ final class ReadModelProjector implements ProophReadModelProjector
 
         $result = $callback();
 
-        if (is_array($result)) {
+        if (\is_array($result)) {
             $this->state = $result;
         }
 
@@ -194,13 +202,14 @@ final class ReadModelProjector implements ProophReadModelProjector
         return $this;
     }
 
-    public function fromStream(string $streamName): ProophReadModelProjector
+    public function fromStream(string $streamName, MetadataMatcher $metadataMatcher = null): ProophReadModelProjector
     {
         if (null !== $this->query) {
             throw new Exception\RuntimeException('From was already called');
         }
 
         $this->query['streams'][] = $streamName;
+        $this->metadataMatcher = $metadataMatcher;
 
         return $this;
     }
@@ -255,16 +264,16 @@ final class ReadModelProjector implements ProophReadModelProjector
 
     public function when(array $handlers): ProophReadModelProjector
     {
-        if (null !== $this->handler || !empty($this->handlers)) {
+        if (null !== $this->handler || ! empty($this->handlers)) {
             throw new Exception\RuntimeException('When was already called');
         }
 
         foreach ($handlers as $eventName => $handler) {
-            if (!is_string($eventName)) {
+            if (! \is_string($eventName)) {
                 throw new Exception\InvalidArgumentException('Invalid event name given, string expected');
             }
 
-            if (!$handler instanceof Closure) {
+            if (! $handler instanceof Closure) {
                 throw new Exception\InvalidArgumentException('Invalid handler given, Closure expected');
             }
 
@@ -277,7 +286,7 @@ final class ReadModelProjector implements ProophReadModelProjector
 
     public function whenAny(Closure $handler): ProophReadModelProjector
     {
-        if (null !== $this->handler || !empty($this->handlers)) {
+        if (null !== $this->handler || ! empty($this->handlers)) {
             throw new Exception\RuntimeException('When was already called');
         }
 
@@ -296,33 +305,43 @@ final class ReadModelProjector implements ProophReadModelProjector
 
         $this->state = [];
 
-        if (is_callable($callback)) {
+        if (\is_callable($callback)) {
             $result = $callback();
 
-            if (is_array($result)) {
+            if (\is_array($result)) {
                 $this->state = $result;
             }
         }
 
         try {
-            $this->connection->patch(
-                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name,
-                    [
-                        'state' => $this->state,
-                        'status' => ProjectionStatus::STOPPING()->getValue(),
-                        'position' => $this->streamPositions,
-                    ]
-                ,
+            $update = Document::updateOne(
+                $this->projectionsTable . '/' . $this->name,
                 [
-                    'silent' => true,
-                    'mergeObjects' => false,
-                ]
+                    'state' => $this->state,
+                    'status' => ProjectionStatus::STOPPING()->getValue(),
+                    'position' => $this->streamPositions,
+                ],
+                Document::FLAG_REPLACE_OBJECTS | Document::FLAG_SILENT
             );
-        } catch (RequestFailedException $e) {
-            // ignore not found error
-            if ($e->getHttpCode() !== 404) {
-                throw RuntimeException::fromServerException($e);
+            $response = $this->client->sendRequest($update->toRequest());
+            $httpStatusCode = $response->getStatusCode();
+
+            if ((
+                    $httpStatusCode < StatusCodeInterface::STATUS_OK
+                    || $httpStatusCode > StatusCodeInterface::STATUS_MULTIPLE_CHOICES
+                )
+                && $httpStatusCode !== StatusCodeInterface::STATUS_NOT_FOUND
+            ) {
+                throw RuntimeException::fromErrorResponse($response);
             }
+        } catch (ClientExceptionInterface $e) {
+            throw RuntimeException::fromServerException($e);
+        }
+
+        try {
+            $this->eventStore->delete(new StreamName($this->name));
+        } catch (Exception\StreamNotFound $exception) {
+            // ignore
         }
     }
 
@@ -331,36 +350,48 @@ final class ReadModelProjector implements ProophReadModelProjector
         $this->isStopped = true;
 
         try {
-            $this->connection->patch(
-                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name,
-                    [
-                        'status' => ProjectionStatus::IDLE()->getValue(),
-                    ]
-                ,
-                ['silent' => true]
+            $update = Document::updateOne(
+                $this->projectionsTable . '/' . $this->name,
+                [
+                    'status' => ProjectionStatus::IDLE()->getValue(),
+                ],
+                Document::FLAG_SILENT
             );
-        } catch (RequestFailedException $e) {
-            // ignore not found error
-            if ($e->getHttpCode() !== 404) {
-                throw RuntimeException::fromServerException($e);
-            }
-        }
+            $response = $this->client->sendRequest($update->toRequest());
+            $httpStatusCode = $response->getStatusCode();
 
+            if ((
+                    $httpStatusCode < StatusCodeInterface::STATUS_OK
+                    || $httpStatusCode > StatusCodeInterface::STATUS_MULTIPLE_CHOICES
+                )
+                && $httpStatusCode !== StatusCodeInterface::STATUS_NOT_FOUND
+            ) {
+                throw RuntimeException::fromErrorResponse($response);
+            }
+        } catch (ClientExceptionInterface $e) {
+            throw RuntimeException::fromServerException($e);
+        }
         $this->status = ProjectionStatus::IDLE();
     }
 
     public function delete(bool $deleteProjection): void
     {
         try {
-            $this->connection->delete(
-                Urls::URL_DOCUMENT . '/' . $this->projectionsTable,
-                    [$this->name]
-            );
-        } catch (RequestFailedException $e) {
-            // ignore
-            if ($e->getHttpCode() !== 422) {
-                throw RuntimeException::fromServerException($e);
+            $delete = Document::deleteOne($this->projectionsTable . '/' . $this->name);
+            $response = $this->client->sendRequest($delete->toRequest());
+
+            $httpStatusCode = $response->getStatusCode();
+
+            if ((
+                    $httpStatusCode < StatusCodeInterface::STATUS_OK
+                    || $httpStatusCode > StatusCodeInterface::STATUS_MULTIPLE_CHOICES
+                )
+                && $httpStatusCode !== StatusCodeInterface::STATUS_UNPROCESSABLE_ENTITY
+            ) {
+                throw RuntimeException::fromErrorResponse($response);
             }
+        } catch (ClientExceptionInterface $e) {
+            // ignore
         }
 
         if ($deleteProjection) {
@@ -373,10 +404,10 @@ final class ReadModelProjector implements ProophReadModelProjector
 
         $this->state = [];
 
-        if (is_callable($callback)) {
+        if (\is_callable($callback)) {
             $result = $callback();
 
-            if (is_array($result)) {
+            if (\is_array($result)) {
                 $this->state = $result;
             }
         }
@@ -430,7 +461,7 @@ final class ReadModelProjector implements ProophReadModelProjector
         $this->createProjection();
         $this->acquireLock();
 
-        if (!$this->readModel->isInitialized()) {
+        if (! $this->readModel->isInitialized()) {
             $this->readModel->init();
         }
 
@@ -445,7 +476,7 @@ final class ReadModelProjector implements ProophReadModelProjector
             do {
                 foreach ($this->streamPositions as $streamName => $position) {
                     try {
-                        $streamEvents = $this->eventStore->load(new StreamName($streamName), $position + 1);
+                        $streamEvents = $this->eventStore->load(new StreamName($streamName), $position + 1, null, $this->metadataMatcher);
                     } catch (Exception\StreamNotFound $e) {
                         // ignore
                         continue;
@@ -463,7 +494,7 @@ final class ReadModelProjector implements ProophReadModelProjector
                 }
 
                 if (0 === $this->eventCounter) {
-                    usleep($this->sleep);
+                    \usleep($this->sleep);
                     $this->updateLock();
                 } else {
                     $this->persist();
@@ -472,7 +503,7 @@ final class ReadModelProjector implements ProophReadModelProjector
                 $this->eventCounter = 0;
 
                 if ($this->triggerPcntlSignalDispatch) {
-                    pcntl_signal_dispatch();
+                    \pcntl_signal_dispatch();
                 }
 
                 switch ($this->fetchRemoteStatus()) {
@@ -493,7 +524,7 @@ final class ReadModelProjector implements ProophReadModelProjector
                 }
 
                 $this->prepareStreamPositions();
-            } while ($keepRunning && !$this->isStopped);
+            } while ($keepRunning && ! $this->isStopped);
         } catch (ProjectionAlreadyExistsException $projectionAlreadyExistsException) {
             // throw it in finally
         } finally {
@@ -509,21 +540,25 @@ final class ReadModelProjector implements ProophReadModelProjector
         $response = null;
 
         try {
-            $response = $this->connection->get(
-                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name
-            );
-        } catch (RequestFailedException $e) {
-            // ignore
-            if ($e->getHttpCode() !== 404) {
-                throw RuntimeException::fromServerException($e);
-            }
-        }
+            $read = Document::read($this->projectionsTable . '/' . $this->name);
+            $response = $this->client->sendRequest($read->toRequest());
+            $httpStatusCode = $response->getStatusCode();
 
-        if (!$response) {
+            if ((
+                    $httpStatusCode < StatusCodeInterface::STATUS_OK
+                    || $httpStatusCode > StatusCodeInterface::STATUS_MULTIPLE_CHOICES
+                )
+                && $httpStatusCode !== StatusCodeInterface::STATUS_NOT_FOUND
+            ) {
+                throw RuntimeException::fromErrorResponse($response);
+            }
+        } catch (ClientExceptionInterface $e) {
+            // ignore
+        }
+        if (! $response) {
             return ProjectionStatus::RUNNING();
         }
-
-        $status = $response->get('status');
+        $status = HttpHelper::responseContentAsArray($response, 'status');
 
         if (empty($status)) {
             return ProjectionStatus::RUNNING();
@@ -537,20 +572,29 @@ final class ReadModelProjector implements ProophReadModelProjector
         $this->currentStreamName = $streamName;
         $handler = $this->handler;
 
-        foreach ($events as $event) {
+        foreach ($events as $key => $event) {
+            if ($this->triggerPcntlSignalDispatch) {
+                \pcntl_signal_dispatch();
+            }
             /* @var Message $event */
-            $this->streamPositions[$streamName]++;
+            $this->streamPositions[$streamName] = $key;
             $this->eventCounter++;
 
             $result = $handler($this->state, $event);
 
-            if (is_array($result)) {
+            if (\is_array($result)) {
                 $this->state = $result;
             }
 
             if ($this->eventCounter === $this->persistBlockSize) {
                 $this->persist();
                 $this->eventCounter = 0;
+
+                $this->status = $this->fetchRemoteStatus();
+
+                if (! $this->status->is(ProjectionStatus::RUNNING()) && ! $this->status->is(ProjectionStatus::IDLE())) {
+                    $this->isStopped = true;
+                }
             }
 
             if ($this->isStopped) {
@@ -563,11 +607,14 @@ final class ReadModelProjector implements ProophReadModelProjector
     {
         $this->currentStreamName = $streamName;
 
-        foreach ($events as $event) {
+        foreach ($events as $key => $event) {
+            if ($this->triggerPcntlSignalDispatch) {
+                \pcntl_signal_dispatch();
+            }
             /* @var Message $event */
-            $this->streamPositions[$streamName]++;
+            $this->streamPositions[$streamName] = $key;
 
-            if (!isset($this->handlers[$event->messageName()])) {
+            if (! isset($this->handlers[$event->messageName()])) {
                 continue;
             }
 
@@ -576,13 +623,19 @@ final class ReadModelProjector implements ProophReadModelProjector
             $handler = $this->handlers[$event->messageName()];
             $result = $handler($this->state, $event);
 
-            if (is_array($result)) {
+            if (\is_array($result)) {
                 $this->state = $result;
             }
 
             if ($this->eventCounter === $this->persistBlockSize) {
                 $this->persist();
                 $this->eventCounter = 0;
+
+                $this->status = $this->fetchRemoteStatus();
+
+                if (! $this->status->is(ProjectionStatus::RUNNING()) && ! $this->status->is(ProjectionStatus::IDLE())) {
+                    $this->isStopped = true;
+                }
             }
 
             if ($this->isStopped) {
@@ -593,8 +646,7 @@ final class ReadModelProjector implements ProophReadModelProjector
 
     private function createHandlerContext(?string &$streamName)
     {
-        return new class($this, $streamName)
-        {
+        return new class($this, $streamName) {
             /**
              * @var ReadModelProjector
              */
@@ -633,26 +685,31 @@ final class ReadModelProjector implements ProophReadModelProjector
         $response = null;
 
         try {
-            $response = $this->connection->get(
-                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name
-            );
-        } catch (RequestFailedException $e) {
-            // ignore
-            if ($e->getHttpCode() !== 404) {
-                throw RuntimeException::fromServerException($e);
+            $read = Document::read($this->projectionsTable . '/' . $this->name);
+            $response = $this->client->sendRequest($read->toRequest());
+            $httpStatusCode = $response->getStatusCode();
+
+            if ((
+                    $httpStatusCode < StatusCodeInterface::STATUS_OK
+                    || $httpStatusCode > StatusCodeInterface::STATUS_MULTIPLE_CHOICES
+                )
+                && $httpStatusCode !== StatusCodeInterface::STATUS_NOT_FOUND
+            ) {
+                throw RuntimeException::fromErrorResponse($response);
             }
+        } catch (ClientExceptionInterface $e) {
+            // ignore
         }
-        if (!$response) {
+        if (! $response) {
             return;
         }
-
-        $result = json_decode($response->getBody(), true);
+        $result = HttpHelper::responseContentAsArray($response);
 
         if (isset($result['position'], $result['state'])) {
-            $this->streamPositions = array_merge($this->streamPositions, $result['position']);
+            $this->streamPositions = \array_merge($this->streamPositions, $result['position']);
             $state = $result['state'];
 
-            if (!empty($state)) {
+            if (! empty($state)) {
                 $this->state = $state;
             }
         }
@@ -661,26 +718,34 @@ final class ReadModelProjector implements ProophReadModelProjector
     private function createProjection(): void
     {
         try {
-            $this->connection->post(
-                Urls::URL_DOCUMENT . '/' . $this->projectionsTable,
+            $create = Document::create(
+                $this->projectionsTable,
                 [
-                    [
-                        '_key' => $this->name,
-                        'position' => (object)null,
-                        'state' => (object)null,
-                        'status' => $this->status->getValue(),
-                        'locked_until' => null,
-                    ],
+                    '_key' => $this->name,
+                    'position' => (object) null,
+                    'state' => (object) null,
+                    'status' => $this->status->getValue(),
+                    'locked_until' => null,
                 ],
-                ['silent' => true]
+                Document::FLAG_SILENT
             );
-        } catch (RequestFailedException $e) {
-            // we ignore any occurring error here (duplicate projection)
-            $httpCode = $e->getHttpCode();
+            $response = $this->client->sendRequest($create->toRequest());
+            $httpStatusCode = $response->getStatusCode();
 
-            if ($httpCode !== 400 && $httpCode !== 404 && $httpCode !== 409) {
-                throw RuntimeException::fromServerException($e);
+            // we ignore any occurring error here (duplicate projection)
+            if (
+                (
+                    $httpStatusCode < StatusCodeInterface::STATUS_OK
+                    || $httpStatusCode > StatusCodeInterface::STATUS_MULTIPLE_CHOICES
+                )
+                && $httpStatusCode !== StatusCodeInterface::STATUS_BAD_REQUEST
+                && $httpStatusCode !== StatusCodeInterface::STATUS_CONFLICT
+                && $httpStatusCode !== StatusCodeInterface::STATUS_NOT_FOUND
+            ) {
+                throw RuntimeException::fromErrorResponse($response);
             }
+        } catch (ClientExceptionInterface $e) {
+            throw RuntimeException::fromServerException($e);
         }
     }
 
@@ -704,30 +769,27 @@ RETURN NEW
 EOF;
 
         try {
-            $cursor = $this->connection->query(
-                [
-                    Statement::ENTRY_QUERY => $aql,
-                    Statement::ENTRY_BINDVARS => [
+            $cursor = new Statement(
+                $this->client,
+                Cursor::create(
+                    $aql,
+                    [
                         '@collection' => $this->projectionsTable,
                         'name' => $this->name,
                         'lockedUntil' => $lockUntilString,
                         'nowString' => $nowString,
                         'status' => ProjectionStatus::RUNNING()->getValue(),
-                    ],
-                    Statement::ENTRY_BATCHSIZE => 1000,
-                ],
-                [
-                    Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
-                ]
+                    ]
+                )->toRequest(),
+                [Statement::ENTRY_TYPE => Statement::ENTRY_TYPE_ARRAY]
             );
 
-            $cursor->rewind();
-            if ($cursor->count() === 0) {
+            if (\count($cursor) === 0) {
                 throw new Exception\RuntimeException('Another projection process is already running');
             }
-        } catch (RequestFailedException $e) {
-            if ($e->getHttpCode() === 404) {
-                throw ProjectionNotFound::with($this->projectionsTable, $e->getBody());
+        } catch (ServerException $e) {
+            if ($e->getCode() === StatusCodeInterface::STATUS_NOT_FOUND) {
+                throw ProjectionNotFound::with($this->projectionsTable, $e->getResponse()->getBody()->getContents());
             }
             throw RuntimeException::fromServerException($e);
         }
@@ -738,22 +800,20 @@ EOF;
     private function updateLock(): void
     {
         $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
-
         $lockUntilString = $this->createLockUntilString($now);
 
         try {
-            $this->connection->patch(
-                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name,
-                    [
-                        'locked_until' => $lockUntilString,
-                    ]
-                ,
-                ['silent' => true]
+            $response = $this->client->sendRequest(
+                Document::updateOne(
+                    $this->projectionsTable . '/' . $this->name,
+                    ['locked_until' => $lockUntilString],
+                    Document::FLAG_SILENT
+                )->toRequest()
             );
-        } catch (RequestFailedException $e) {
-            if ($e->getHttpCode() === 404) {
-                throw ProjectionNotFound::with($this->name, $e->getBody());
+            if ($response->getStatusCode() === StatusCodeInterface::STATUS_NOT_FOUND) {
+                throw ProjectionNotFound::with($this->name, $response->getBody()->getContents());
             }
+        } catch (ClientExceptionInterface $e) {
             throw RuntimeException::fromServerException($e);
         }
     }
@@ -761,20 +821,28 @@ EOF;
     private function releaseLock(): void
     {
         try {
-            $this->connection->patch(
-                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name,
+            $response = $this->client->sendRequest(
+                Document::updateOne(
+                    $this->projectionsTable . '/' . $this->name,
                     [
                         'status' => ProjectionStatus::IDLE()->getValue(),
                         'locked_until' => null,
-                    ]
-                ,
-                ['silent' => true]
+                    ],
+                    Document::FLAG_SILENT
+                )->toRequest()
             );
-        } catch (RequestFailedException $e) {
-            //  ignore not found error
-            if ($e->getHttpCode() !== 404) {
-                throw RuntimeException::fromServerException($e);
+            $httpStatusCode = $response->getStatusCode();
+
+            if ((
+                    $httpStatusCode < StatusCodeInterface::STATUS_OK
+                    || $httpStatusCode > StatusCodeInterface::STATUS_MULTIPLE_CHOICES
+                )
+                && $httpStatusCode !== StatusCodeInterface::STATUS_NOT_FOUND
+            ) {
+                throw ProjectionNotFound::with($this->name, $response->getBody()->getContents());
             }
+        } catch (ClientExceptionInterface $e) {
+            throw RuntimeException::fromServerException($e);
         }
 
         $this->status = ProjectionStatus::IDLE();
@@ -785,28 +853,32 @@ EOF;
         $this->readModel->persist();
 
         $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
-
         $lockUntilString = $this->createLockUntilString($now);
 
         try {
-            $this->connection->patch(
-                Urls::URL_DOCUMENT . '/' . $this->projectionsTable . '/' . $this->name,
+            $response = $this->client->sendRequest(
+                Document::updateOne(
+                    $this->projectionsTable . '/' . $this->name,
                     [
                         'position' => $this->streamPositions,
                         'state' => $this->state,
                         'locked_until' => $lockUntilString,
-                    ]
-                ,
-                [
-                    'silent' => true,
-                    'mergeObjects' => false,
-                ]
+                    ],
+                    Document::FLAG_REPLACE_OBJECTS | Document::FLAG_SILENT
+                )->toRequest()
             );
-        } catch (RequestFailedException $e) {
-            //  ignore not found error
-            if ($e->getHttpCode() !== 404) {
-                throw RuntimeException::fromServerException($e);
+            $httpStatusCode = $response->getStatusCode();
+
+            if ((
+                    $httpStatusCode < StatusCodeInterface::STATUS_OK
+                    || $httpStatusCode > StatusCodeInterface::STATUS_MULTIPLE_CHOICES
+                )
+                && $httpStatusCode !== StatusCodeInterface::STATUS_NOT_FOUND
+            ) {
+                throw ProjectionNotFound::with($this->name, $response->getBody()->getContents());
             }
+        } catch (ClientExceptionInterface $e) {
+            throw RuntimeException::fromServerException($e);
         }
     }
 
@@ -823,30 +895,30 @@ RETURN {
 }
 EOF;
 
-            $cursor = $this->connection->query(
-                    [
-                        Statement::ENTRY_QUERY => $aql,
-                        Statement::ENTRY_BINDVARS => [
+            try {
+                $cursor = new Statement(
+                    $this->client,
+                    Cursor::create(
+                        $aql,
+                        [
                             '@collection' => $this->eventStreamsTable,
                         ],
-                        Statement::ENTRY_BATCHSIZE => 1000,
-                    ]
-                ,
-                [
-                    Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
-                ]
-            );
+                        1000
+                    )->toRequest(),
+                    [Statement::ENTRY_TYPE => Statement::ENTRY_TYPE_ARRAY]
+                );
 
-            $cursor->rewind();
+                $cursor->rewind();
+                while ($cursor->valid()) {
+                    $streamPositions[$cursor->current()['real_stream_name']] = 0;
+                    $cursor->next();
+                }
+                $this->streamPositions = \array_merge($streamPositions, $this->streamPositions);
 
-            while ($cursor->valid()) {
-                $streamPositions[$cursor->current()['real_stream_name']] = 0;
-                $cursor->next();
+                return;
+            } catch (ServerException $e) {
+                throw RuntimeException::fromServerException($e);
             }
-
-            $this->streamPositions = array_merge($streamPositions, $this->streamPositions);
-
-            return;
         }
 
         if (isset($this->query['categories'])) {
@@ -857,32 +929,31 @@ RETURN {
     "real_stream_name": c.real_stream_name
 }
 EOF;
-
-            $cursor = $this->connection->query(
-                    [
-                        Statement::ENTRY_QUERY => $aql,
-                        Statement::ENTRY_BINDVARS => [
+            try {
+                $cursor = new Statement(
+                    $this->client,
+                    Cursor::create(
+                        $aql,
+                        [
                             '@collection' => $this->eventStreamsTable,
                             'categories' => $this->query['categories'],
                         ],
-                        Statement::ENTRY_BATCHSIZE => 1000,
-                    ]
-                ,
-                [
-                    Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
-                ]
-            );
+                        1000
+                    )->toRequest(),
+                    [Statement::ENTRY_TYPE => Statement::ENTRY_TYPE_ARRAY]
+                );
 
-            $cursor->rewind();
+                $cursor->rewind();
+                while ($cursor->valid()) {
+                    $streamPositions[$cursor->current()['real_stream_name']] = 0;
+                    $cursor->next();
+                }
+                $this->streamPositions = \array_merge($streamPositions, $this->streamPositions);
 
-            while ($cursor->valid()) {
-                $streamPositions[$cursor->current()['real_stream_name']] = 0;
-                $cursor->next();
+                return;
+            } catch (ServerException $e) {
+                throw RuntimeException::fromServerException($e);
             }
-
-            $this->streamPositions = array_merge($streamPositions, $this->streamPositions);
-
-            return;
         }
 
         // stream names given
@@ -890,20 +961,20 @@ EOF;
             $streamPositions[$streamName] = 0;
         }
 
-        $this->streamPositions = array_merge($streamPositions, $this->streamPositions);
+        $this->streamPositions = \array_merge($streamPositions, $this->streamPositions);
     }
 
     private function createLockUntilString(DateTimeImmutable $from): string
     {
-        $micros = (string)((int)$from->format('u') + ($this->lockTimeoutMs * 1000));
+        $micros = (string) ((int) $from->format('u') + ($this->lockTimeoutMs * 1000));
 
-        $secs = substr($micros, 0, -6);
+        $secs = \substr($micros, 0, -6);
 
         if ('' === $secs) {
             $secs = 0;
         }
 
-        $resultMicros = substr($micros, -6);
+        $resultMicros = \substr($micros, -6);
 
         return $from->modify('+' . $secs . ' seconds')->format('Y-m-d\TH:i:s') . '.' . $resultMicros;
     }

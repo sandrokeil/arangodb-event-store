@@ -12,29 +12,33 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Exception;
 
-use ArangoDb\RequestFailedException;
-use Prooph\EventStore\ArangoDb\Type\Type;
 use Prooph\EventStore\Exception\RuntimeException as EventStoreRuntimeException;
+use Psr\Http\Message\ResponseInterface;
 
 class RuntimeException extends EventStoreRuntimeException implements ArangoDbEventStoreException
 {
-    public static function fromErrorResponse(string $body, Type $type)
+    public static function fromErrorResponse(ResponseInterface $response)
     {
-        $data = json_decode($body, true) ?: [];
+        $body = $response->getBody()->getContents();
+        $data = \json_decode($body, true) ?: [];
 
-        return new self(sprintf(
-                'Code: %s Error Number: %s Error Message: %s Type: %s Raw: %s',
+        return new self(\sprintf(
+                'Code: %s Error Number: %s Error Message: %s Raw: %s',
                 $data['code'] ?? '',
                 $data['errorNum'] ?? '',
                 $data['errorMessage'] ?? '',
-                get_class($type),
                 $body
             )
         );
     }
 
-    public static function fromServerException(RequestFailedException $e)
+    public static function fromServerException(\Throwable $e)
     {
         return new self($e->getMessage(), $e->getCode(), $e);
+    }
+
+    public static function fromResponse(ResponseInterface $response)
+    {
+        return new self($response->getReasonPhrase(), $response->getStatusCode());
     }
 }

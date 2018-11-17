@@ -22,23 +22,23 @@
     "prefer-stable": true,
     "require": {
         "php": "^7.1",
+        "ext-json": "*",
         "prooph/event-store": "^7.2",
-        "triagens/arangodb": "^3.3",
-        "prooph/standard-projections": "^1.0"
+        "prooph/standard-projections": "^1.0",
+        "sandrokeil/arangodb-php-client": "dev-master"
     },
     "require-dev": {
+        "roave/security-advisories": "dev-master",
         "container-interop/container-interop": "^1.1",
         "sandrokeil/interop-config": "2.1",
         "phpunit/phpunit": "^6.0",
         "phpspec/prophecy": "^1.7",
         "prooph/php-cs-fixer-config": "^0.2.1",
-        "malukenho/docheader": "^0.1.4",
-        "prooph/arangodb-php-driver-polyfill": "dev-master"
+        "malukenho/docheader": "^0.1.7"
     },
     "suggest": {
         "psr/container": "^1.0 for usage of provided factories",
-        "sandrokeil/interop-config": "^2.0.1 for usage of provided factories",
-        "prooph/arangodb-php-driver-polyfill": "ArangoDB PHP extension polyfill if needed"
+        "sandrokeil/interop-config": "^2.0.1 for usage of provided factories"
     },
     "conflict": {
         "sandrokeil/interop-config": "<2.0.1"
@@ -74,7 +74,7 @@
     "repositories": [
         {
             "type": "git",
-            "url": "https://github.com/sandrokeil/arangodb-php-driver-polyfill.git"
+            "url": "https://github.com/sandrokeil/arangodb-php-client"
         }
     ]
 }

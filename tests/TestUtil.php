@@ -12,21 +12,73 @@ declare(strict_types=1);
 
 namespace ProophTest\EventStore\ArangoDb;
 
-use ArangoDb\Connection;
-use ArangoDb\RequestFailedException;
-use ArangoDb\Vpack;
-use ArangoDBClient\Urls;
+use ArangoDb\Client;
+use ArangoDb\ClientOptions;
+use ArangoDb\TransactionalClient;
+use ArangoDb\Type\Batch;
+use ArangoDb\Type\Collection;
+use ArangoDb\Type\Database;
+use Psr\Http\Client\ClientInterface;
 use function Prooph\EventStore\ArangoDb\Fn\eventStreamsBatch;
-use function Prooph\EventStore\ArangoDb\Fn\execute;
 use function Prooph\EventStore\ArangoDb\Fn\projectionsBatch;
 
 final class TestUtil
 {
-    public static function getClient(): Connection
+    public static function getClient(): TransactionalClient
     {
-        $connection = new Connection(self::getConnectionParams());
-        $connection->connect();
-        return $connection;
+        $type = 'application/' . (\getenv('USE_VPACK') === 'true' ? 'x-velocypack' : 'json');
+        $params = self::getConnectionParams();
+
+        return new TransactionalClient(
+            new Client(
+            $params,
+            [
+                'Content-Type' => [$type],
+                'Accept' => [$type],
+            ]
+        ));
+    }
+
+    public static function createDatabase(): void
+    {
+        $type = 'application/' . (\getenv('USE_VPACK') === 'true' ? 'x-velocypack' : 'json');
+        $params = self::getConnectionParams();
+
+        if ($params[ClientOptions::OPTION_DATABASE] === '_system') {
+            throw new \RuntimeException('"_system" database can not be created. Choose another database for tests.');
+        }
+
+        $params[ClientOptions::OPTION_DATABASE] = '_system';
+
+        $client = new Client(
+            $params,
+            [
+                'Content-Type' => [$type],
+                'Accept' => [$type],
+            ]
+        );
+        $client->sendRequest(Database::create(self::getDatabaseName())->toRequest());
+    }
+
+    public static function dropDatabase(): void
+    {
+        $type = 'application/json';
+        $params = self::getConnectionParams();
+
+        if ($params[ClientOptions::OPTION_DATABASE] === '_system') {
+            throw new \RuntimeException('"_system" database can not be dropped. Choose another database for tests.');
+        }
+
+        $params[ClientOptions::OPTION_DATABASE] = '_system';
+
+        $client = new Client(
+            $params,
+            [
+                'Content-Type' => [$type],
+                'Accept' => [$type],
+            ]
+        );
+        $client->sendRequest(Database::delete(self::getDatabaseName())->toRequest());
     }
 
     public static function getDatabaseName(): string
@@ -35,7 +87,7 @@ final class TestUtil
             throw new \RuntimeException('No connection params given');
         }
 
-        return $GLOBALS['arangodb_dbname'];
+        return \getenv('arangodb_dbname');
     }
 
     public static function getConnectionParams(): array
@@ -47,24 +99,30 @@ final class TestUtil
         return self::getSpecifiedConnectionParams();
     }
 
-    public static function setupCollections(Connection $connection): void
+    public static function setupCollections(ClientInterface $connection): void
     {
-        execute($connection, null, ...eventStreamsBatch());
-        execute($connection, null, ...projectionsBatch());
+        $connection->sendRequest(
+            Batch::fromTypes(...eventStreamsBatch())->toRequest()
+        );
+        $connection->sendRequest(
+            Batch::fromTypes(...projectionsBatch())->toRequest()
+        );
     }
 
-    public static function deleteCollection(Connection $connection, string $collection): void
+    public static function deleteCollection(ClientInterface $connection, string $collection): void
     {
         try {
-            $connection->delete(Urls::URL_COLLECTION . '/' . $collection, []);
-        } catch (RequestFailedException $e) {
+            $connection->sendRequest(
+                Collection::delete($collection)->toRequest()
+            );
+        } catch (\Throwable $e) {
             // needed if test deletes collection
         }
     }
 
     private static function hasRequiredConnectionParams(): bool
     {
-        $env = getenv();
+        $env = \getenv();
 
         return isset(
             $env['arangodb_username'],
@@ -77,9 +135,8 @@ final class TestUtil
     private static function getSpecifiedConnectionParams(): array
     {
         return [
-            Connection::HOST => getenv('arangodb_host'),
-            Connection::MAX_CHUNK_SIZE => 64,
-            Connection::VST_VERSION => Connection::VST_VERSION_11,
+            ClientOptions::OPTION_ENDPOINT => \getenv('arangodb_host'),
+            ClientOptions::OPTION_DATABASE => \getenv('arangodb_dbname'),
         ];
     }
 }

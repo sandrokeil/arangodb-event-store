@@ -12,13 +12,13 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb;
 
+use ArangoDb\Guard\Guard;
 use Iterator;
-use Prooph\EventStore\ArangoDb\JsonIterator;
 use Prooph\EventStore\StreamName;
 
 interface PersistenceStrategy
 {
-    public function createCollection(string $collectionName): array;
+    public function createCollection(string $collectionName, Guard $collectionGuard): array;
 
     public function prepareData(Iterator $streamEvents): iterable;
 
@@ -27,6 +27,4 @@ interface PersistenceStrategy
     public function padPosition(int $position): int;
 
     public function offsetNumber(): int;
-
-    public function jsonIterator(Iterator $streamEvents): JsonIterator;
 }

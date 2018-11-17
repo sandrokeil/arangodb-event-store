@@ -11,7 +11,7 @@
 declare(strict_types=1);
 
 use Prooph\Common\Messaging\FQCNMessageFactory;
-use Prooph\EventStore\ArangoDb\EventStore;
+use Prooph\EventStore\ArangoDb\ArangoDbEventStore;
 use Prooph\EventStore\ArangoDb\PersistenceStrategy\SimpleStreamStrategy;
 use Prooph\EventStore\ArangoDb\Projection\ProjectionManager;
 use Prooph\EventStore\ArangoDb\Projection\Projector;
@@ -50,7 +50,7 @@ $readModel = new class() implements ReadModel {
 
 $connection = TestUtil::getClient();
 
-$eventStore = new EventStore(
+$eventStore = new ArangoDbEventStore(
     new FQCNMessageFactory(),
     $connection,
     new SimpleStreamStrategy()
@@ -67,7 +67,7 @@ $projection = $projectionManager->createReadModelProjection(
         Projector::OPTION_PCNTL_DISPATCH => true,
     ]
 );
-pcntl_signal(SIGQUIT, function () use ($projection) {
+\pcntl_signal(SIGQUIT, function () use ($projection) {
     $projection->stop();
     exit(SIGUSR1);
 });
