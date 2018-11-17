@@ -67,7 +67,7 @@ $projection = $projectionManager->createReadModelProjection(
         Projector::OPTION_PCNTL_DISPATCH => true,
     ]
 );
-pcntl_signal(SIGQUIT, function () use ($projection) {
+\pcntl_signal(SIGQUIT, function () use ($projection) {
     $projection->stop();
     exit(SIGUSR1);
 });

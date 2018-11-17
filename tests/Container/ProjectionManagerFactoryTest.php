@@ -37,7 +37,7 @@ class ProjectionManagerFactoryTest extends TestCase
             'connection' => 'my_connection',
         ];
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
 
         $container = $this->prophesize(ContainerInterface::class);
         $eventStore = new EventStore(
@@ -46,7 +46,7 @@ class ProjectionManagerFactoryTest extends TestCase
             $this->createMock(PersistenceStrategy::class)
         );
 
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
         $container->get(ProophEventStore::class)->willReturn($eventStore)->shouldBeCalled();
         $container->get('config')->willReturn($config)->shouldBeCalled();
 
@@ -65,7 +65,7 @@ class ProjectionManagerFactoryTest extends TestCase
             'connection' => 'my_connection',
         ];
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
 
         $container = $this->prophesize(ContainerInterface::class);
         $eventStore = new EventStore(
@@ -74,7 +74,7 @@ class ProjectionManagerFactoryTest extends TestCase
             $this->createMock(PersistenceStrategy::class)
         );
 
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
         $container->get(ProophEventStore::class)->willReturn($eventStore)->shouldBeCalled();
         $container->get('config')->willReturn($config)->shouldBeCalled();
 

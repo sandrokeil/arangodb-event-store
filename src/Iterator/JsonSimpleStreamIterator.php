@@ -22,7 +22,7 @@ final class JsonSimpleStreamIterator extends IteratorIterator implements JsonIte
         $json = '[';
 
         foreach ($this->getInnerIterator() as $event) {
-            $json .= json_encode([
+            $json .= \json_encode([
                     'event_id' => $event->uuid()->toString(),
                     'event_name' => $event->messageName(),
                     'payload' => $event->payload(),

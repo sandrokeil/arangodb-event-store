@@ -12,7 +12,7 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Exception;
 
-use ArangoDb\Response;
+use ArangoDb\Http\Response;
 
 class ProjectionNotCreatedException extends RuntimeException
 {
@@ -28,7 +28,7 @@ class ProjectionNotCreatedException extends RuntimeException
 
     public static function with(string $projectionName, ?Response $response): ProjectionNotCreatedException
     {
-        $self = new self(sprintf('Projection "%s" was not created', $projectionName));
+        $self = new self(\sprintf('Projection "%s" was not created', $projectionName));
         $self->response = $response;
 
         return $self;

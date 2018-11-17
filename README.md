@@ -16,7 +16,7 @@
 TBD
 
 ## Tests
-If you want to run the unit tests locally you need [Docker](https://docs.docker.com/engine/installation/ "Install Docker") 
+If you want to run the unit tests locally you need [Docker](https://docs.docker.com/engine/installation/ "Install Docker")
 and [Docker Compose](https://docs.docker.com/compose/install/ "Install Docker Compose").
 
 Install dependencies with:
@@ -35,6 +35,6 @@ Execute tests with
 ```
 $ docker-compose run --rm php vendor/bin/phpunit
 
-$ docker-compose run --rm php-polyfill vendor/bin/phpunit
+$ docker-compose run --rm vpack vendor/bin/phpunit
 ```
 

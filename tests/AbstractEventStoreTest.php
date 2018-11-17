@@ -12,7 +12,6 @@ declare(strict_types=1);
 
 namespace ProophTest\EventStore\ArangoDb;
 
-use ArangoDb\Connection;
 use ArrayIterator;
 use Prooph\Common\Messaging\FQCNMessageFactory;
 use Prooph\EventStore\ArangoDb\EventStore;
@@ -24,13 +23,14 @@ use Prooph\EventStore\Stream;
 use Prooph\EventStore\StreamName;
 use ProophTest\EventStore\AbstractEventStoreTest as BaseTestCase;
 use ProophTest\EventStore\Mock\UserCreated;
+use Psr\Http\Client\ClientInterface;
 
 abstract class AbstractEventStoreTest extends BaseTestCase
 {
     /**
-     * @var Connection
+     * @var ClientInterface
      */
-    private $connection;
+    protected $client;
 
     abstract protected function getPersistenceStrategy(): PersistenceStrategy;
 
@@ -319,28 +319,19 @@ abstract class AbstractEventStoreTest extends BaseTestCase
 
     protected function setUp(): void
     {
-        $this->connection = TestUtil::getClient();
-        TestUtil::setupCollections($this->connection);
+        TestUtil::createDatabase();
+        $this->client = TestUtil::getClient();
+        TestUtil::setupCollections($this->client);
 
         $this->eventStore = new EventStore(
             new FQCNMessageFactory(),
-            $this->connection,
+            $this->client,
             $this->getPersistenceStrategy()
         );
     }
 
     protected function tearDown(): void
     {
-        TestUtil::deleteCollection($this->connection, 'event_streams');
-
-        $collectionName = 'c' . sha1('Prooph\Model\User');
-
-        try {
-            TestUtil::deleteCollection($this->connection, $collectionName);
-            TestUtil::deleteCollection($this->connection, 'projections');
-        } catch (\ArangoDBClient\ServerException $e) {
-            // needed if test deletes collection
-        }
-        unset($this->connection);
+        TestUtil::dropDatabase();
     }
 }

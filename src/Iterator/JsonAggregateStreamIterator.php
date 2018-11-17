@@ -40,7 +40,7 @@ final class JsonAggregateStreamIterator extends IteratorIterator implements Json
             if (! isset($event->metadata()['_aggregate_version'])) {
                 throw new RuntimeException('_aggregate_version is missing in metadata');
             }
-            $json .= json_encode([
+            $json .= \json_encode([
                 '_key' => (string) $this->persistenceStrategy->padPosition($event->metadata()['_aggregate_version']),
                 'event_id' => $event->uuid()->toString(),
                 'event_name' => $event->messageName(),

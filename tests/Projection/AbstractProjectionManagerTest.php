@@ -12,7 +12,6 @@ declare(strict_types=1);
 
 namespace ProophTest\EventStore\ArangoDb\Projection;
 
-use ArangoDb\Connection;
 use Prooph\Common\Messaging\FQCNMessageFactory;
 use Prooph\EventStore\ArangoDb\EventStore;
 use Prooph\EventStore\ArangoDb\Exception\InvalidArgumentException;
@@ -23,13 +22,14 @@ use Prooph\EventStore\EventStore as ProophEventStore;
 use Prooph\EventStore\EventStoreDecorator;
 use ProophTest\EventStore\ArangoDb\TestUtil;
 use ProophTest\EventStore\Projection\AbstractProjectionManagerTest as BaseTestCase;
+use Psr\Http\Client\ClientInterface;
 
 abstract class AbstractProjectionManagerTest extends BaseTestCase
 {
     /**
-     * @var Connection
+     * @var ClientInterface
      */
-    private $connection;
+    private $client;
 
     /**
      * @var EventStore
@@ -47,7 +47,7 @@ abstract class AbstractProjectionManagerTest extends BaseTestCase
 
         $eventStore = $this->prophesize(ProophEventStore::class);
 
-        new ProjectionManager($eventStore->reveal(), $this->connection);
+        new ProjectionManager($eventStore->reveal(), $this->client);
     }
 
     /**
@@ -61,7 +61,7 @@ abstract class AbstractProjectionManagerTest extends BaseTestCase
         $wrappedEventStore = $this->prophesize(EventStoreDecorator::class);
         $wrappedEventStore->getInnerEventStore()->willReturn($eventStore->reveal())->shouldBeCalled();
 
-        new ProjectionManager($wrappedEventStore->reveal(), $this->connection);
+        new ProjectionManager($wrappedEventStore->reveal(), $this->client);
     }
 
     /**
@@ -71,7 +71,7 @@ abstract class AbstractProjectionManagerTest extends BaseTestCase
     {
         $this->expectException(ProjectionNotFound::class);
 
-        TestUtil::deleteCollection($this->connection, 'projections');
+        TestUtil::deleteCollection($this->client, 'projections');
 
         $this->projectionManager->fetchProjectionNames(null, 200, 0);
     }
@@ -94,33 +94,28 @@ abstract class AbstractProjectionManagerTest extends BaseTestCase
     {
         $this->expectException(ProjectionNotFound::class);
 
-        TestUtil::deleteCollection($this->connection, 'projections');
+        TestUtil::deleteCollection($this->client, 'projections');
 
         $this->projectionManager->fetchProjectionNamesRegex('^foo', 200, 0);
     }
 
     protected function setUp(): void
     {
-        $this->connection = TestUtil::getClient();
-        TestUtil::setupCollections($this->connection);
+        TestUtil::createDatabase();
+        $this->client = TestUtil::getClient();
+        TestUtil::setupCollections($this->client);
 
         $this->eventStore = new EventStore(
             new FQCNMessageFactory(),
-            $this->connection,
+            $this->client,
             $this->getPersistenceStrategy()
         );
-        $this->projectionManager = new ProjectionManager($this->eventStore, $this->connection);
+        $this->projectionManager = new ProjectionManager($this->eventStore, $this->client);
     }
 
     protected function tearDown(): void
     {
-        TestUtil::deleteCollection($this->connection, 'event_streams');
-
-        try {
-            TestUtil::deleteCollection($this->connection, 'projections');
-        } catch (\ArangoDBClient\ServerException $e) {
-            // needed if test deletes collection
-        }
-        unset($this->connection);
+        TestUtil::dropDatabase();
+        unset($this->client);
     }
 }

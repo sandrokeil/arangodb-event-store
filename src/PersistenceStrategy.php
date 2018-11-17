@@ -13,7 +13,6 @@ declare(strict_types=1);
 namespace Prooph\EventStore\ArangoDb;
 
 use Iterator;
-use Prooph\EventStore\ArangoDb\JsonIterator;
 use Prooph\EventStore\StreamName;
 
 interface PersistenceStrategy

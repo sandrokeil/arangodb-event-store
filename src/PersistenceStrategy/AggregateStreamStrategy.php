@@ -12,13 +12,13 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\PersistenceStrategy;
 
+use ArangoDb\Type\Collection;
+use ArangoDb\Type\Index;
 use Iterator;
 use Prooph\EventStore\ArangoDb\Exception;
 use Prooph\EventStore\ArangoDb\Iterator\JsonAggregateStreamIterator;
 use Prooph\EventStore\ArangoDb\JsonIterator;
 use Prooph\EventStore\ArangoDb\PersistenceStrategy;
-use Prooph\EventStore\ArangoDb\Type\CreateCollection;
-use Prooph\EventStore\ArangoDb\Type\CreateIndex;
 use Prooph\EventStore\StreamName;
 
 final class AggregateStreamStrategy implements PersistenceStrategy
@@ -30,7 +30,7 @@ final class AggregateStreamStrategy implements PersistenceStrategy
 
     public function __construct()
     {
-        $this->offsetNumber = (int) str_pad('1', strlen((string) PHP_INT_MAX) - 1, '0');
+        $this->offsetNumber = (int) \str_pad('1', \strlen((string) PHP_INT_MAX) - 1, '0');
     }
 
     public function jsonIterator(Iterator $streamEvents): JsonIterator
@@ -54,7 +54,7 @@ final class AggregateStreamStrategy implements PersistenceStrategy
 
     public function createCollection(string $collectionName): array
     {
-        $collection = CreateCollection::with(
+        $collection = Collection::create(
             $collectionName,
             [
                 'keyOptions' => [
@@ -64,7 +64,7 @@ final class AggregateStreamStrategy implements PersistenceStrategy
             ]
         );
 
-        $aggregateVersionIndex = CreateIndex::with(
+        $aggregateVersionIndex = Index::create(
             $collectionName,
             [
                 'type' => 'skiplist',
@@ -77,7 +77,7 @@ final class AggregateStreamStrategy implements PersistenceStrategy
             ]
         );
 
-        $eventIdIndex = CreateIndex::with(
+        $eventIdIndex = Index::create(
             $collectionName,
             [
                 'type' => 'hash',
@@ -90,7 +90,7 @@ final class AggregateStreamStrategy implements PersistenceStrategy
             ]
         );
 
-        $sortingIndex = CreateIndex::with(
+        $sortingIndex = Index::create(
             $collectionName,
             [
                 'type' => 'skiplist',
@@ -134,6 +134,6 @@ final class AggregateStreamStrategy implements PersistenceStrategy
 
     public function generateCollectionName(StreamName $streamName): string
     {
-        return 'c' . sha1($streamName->toString());
+        return 'c' . \sha1($streamName->toString());
     }
 }

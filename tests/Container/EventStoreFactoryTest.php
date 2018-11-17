@@ -41,12 +41,12 @@ final class EventStoreFactoryTest extends TestCase
             'wrap_action_event_emitter' => false,
         ];
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
 
         $container = $this->prophesize(ContainerInterface::class);
 
         $container->get('config')->willReturn($config)->shouldBeCalled();
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
         $container->get(FQCNMessageFactory::class)->willReturn(new FQCNMessageFactory())->shouldBeCalled();
         $container->get(PersistenceStrategy\AggregateStreamStrategy::class)->willReturn(new PersistenceStrategy\AggregateStreamStrategy())->shouldBeCalled();
 
@@ -66,12 +66,12 @@ final class EventStoreFactoryTest extends TestCase
             'persistence_strategy' => PersistenceStrategy\AggregateStreamStrategy::class,
         ];
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
 
         $container = $this->prophesize(ContainerInterface::class);
 
         $container->get('config')->willReturn($config)->shouldBeCalled();
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
         $container->get(FQCNMessageFactory::class)->willReturn(new FQCNMessageFactory())->shouldBeCalled();
         $container->get(PersistenceStrategy\AggregateStreamStrategy::class)->willReturn(new PersistenceStrategy\AggregateStreamStrategy())->shouldBeCalled();
 
@@ -92,12 +92,12 @@ final class EventStoreFactoryTest extends TestCase
             'plugins' => ['plugin'],
         ];
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
 
         $container = $this->prophesize(ContainerInterface::class);
 
         $container->get('config')->willReturn($config)->shouldBeCalled();
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
         $container->get(FQCNMessageFactory::class)->willReturn(new FQCNMessageFactory())->shouldBeCalled();
         $container->get(PersistenceStrategy\AggregateStreamStrategy::class)->willReturn(new PersistenceStrategy\AggregateStreamStrategy())->shouldBeCalled();
 
@@ -126,12 +126,12 @@ final class EventStoreFactoryTest extends TestCase
             'plugins' => ['plugin'],
         ];
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
 
         $container = $this->prophesize(ContainerInterface::class);
 
         $container->get('config')->willReturn($config)->shouldBeCalled();
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
         $container->get(FQCNMessageFactory::class)->willReturn(new FQCNMessageFactory())->shouldBeCalled();
         $container->get(PersistenceStrategy\AggregateStreamStrategy::class)->willReturn(new PersistenceStrategy\AggregateStreamStrategy())->shouldBeCalled();
 
@@ -155,12 +155,12 @@ final class EventStoreFactoryTest extends TestCase
         $metadataEnricher1 = $this->prophesize(MetadataEnricher::class);
         $metadataEnricher2 = $this->prophesize(MetadataEnricher::class);
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
 
         $container = $this->prophesize(ContainerInterface::class);
 
         $container->get('config')->willReturn($config);
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
         $container->get(FQCNMessageFactory::class)->willReturn(new FQCNMessageFactory())->shouldBeCalled();
         $container->get(PersistenceStrategy\AggregateStreamStrategy::class)->willReturn(new PersistenceStrategy\AggregateStreamStrategy())->shouldBeCalled();
 
@@ -187,12 +187,12 @@ final class EventStoreFactoryTest extends TestCase
             'metadata_enrichers' => ['foobar'],
         ];
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
 
         $container = $this->prophesize(ContainerInterface::class);
 
         $container->get('config')->willReturn($config);
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
         $container->get(FQCNMessageFactory::class)->willReturn(new FQCNMessageFactory())->shouldBeCalled();
         $container->get(PersistenceStrategy\AggregateStreamStrategy::class)->willReturn(new PersistenceStrategy\AggregateStreamStrategy())->shouldBeCalled();
 

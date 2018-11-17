@@ -12,12 +12,12 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\PersistenceStrategy;
 
+use ArangoDb\Type\Collection;
+use ArangoDb\Type\Index;
 use Iterator;
-use Prooph\EventStore\ArangoDb\JsonIterator;
 use Prooph\EventStore\ArangoDb\Iterator\JsonSimpleStreamIterator;
+use Prooph\EventStore\ArangoDb\JsonIterator;
 use Prooph\EventStore\ArangoDb\PersistenceStrategy;
-use Prooph\EventStore\ArangoDb\Type\CreateCollection;
-use Prooph\EventStore\ArangoDb\Type\CreateIndex;
 use Prooph\EventStore\StreamName;
 
 final class SimpleStreamStrategy implements PersistenceStrategy
@@ -29,7 +29,7 @@ final class SimpleStreamStrategy implements PersistenceStrategy
 
     public function __construct()
     {
-        $this->offsetNumber = (int) str_pad('1', strlen((string) PHP_INT_MAX) - 1, '0');
+        $this->offsetNumber = (int) \str_pad('1', \strlen((string) PHP_INT_MAX) - 1, '0');
     }
 
     public function jsonIterator(Iterator $streamEvents): JsonIterator
@@ -53,7 +53,7 @@ final class SimpleStreamStrategy implements PersistenceStrategy
 
     public function createCollection(string $collectionName): array
     {
-        $collection = CreateCollection::with(
+        $collection = Collection::create(
             $collectionName,
             [
                 'keyOptions' => [
@@ -65,7 +65,7 @@ final class SimpleStreamStrategy implements PersistenceStrategy
             ]
         );
 
-        $eventIdIndex = CreateIndex::with(
+        $eventIdIndex = Index::create(
             $collectionName,
             [
                 'type' => 'hash',
@@ -78,7 +78,7 @@ final class SimpleStreamStrategy implements PersistenceStrategy
             ]
         );
 
-        $sortingIndex = CreateIndex::with(
+        $sortingIndex = Index::create(
             $collectionName,
             [
                 'type' => 'skiplist',
@@ -117,6 +117,6 @@ final class SimpleStreamStrategy implements PersistenceStrategy
 
     public function generateCollectionName(StreamName $streamName): string
     {
-        return 'c' . sha1($streamName->toString());
+        return 'c' . \sha1($streamName->toString());
     }
 }

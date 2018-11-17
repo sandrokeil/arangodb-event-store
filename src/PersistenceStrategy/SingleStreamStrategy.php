@@ -12,12 +12,13 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\PersistenceStrategy;
 
+use ArangoDb\Type\Collection;
+use ArangoDb\Type\CreateCollection;
+use ArangoDb\Type\Index;
 use Iterator;
-use Prooph\EventStore\ArangoDb\JsonIterator;
 use Prooph\EventStore\ArangoDb\Iterator\JsonSingleStreamIterator;
+use Prooph\EventStore\ArangoDb\JsonIterator;
 use Prooph\EventStore\ArangoDb\PersistenceStrategy;
-use Prooph\EventStore\ArangoDb\Type\CreateCollection;
-use Prooph\EventStore\ArangoDb\Type\CreateIndex;
 use Prooph\EventStore\StreamName;
 
 final class SingleStreamStrategy implements PersistenceStrategy
@@ -29,7 +30,7 @@ final class SingleStreamStrategy implements PersistenceStrategy
 
     public function __construct()
     {
-        $this->offsetNumber = (int) str_pad('1', strlen((string) PHP_INT_MAX) - 1, '0');
+        $this->offsetNumber = (int) \str_pad('1', \strlen((string) PHP_INT_MAX) - 1, '0');
     }
 
     public function jsonIterator(Iterator $streamEvents): JsonIterator
@@ -53,7 +54,7 @@ final class SingleStreamStrategy implements PersistenceStrategy
 
     public function createCollection(string $collectionName): array
     {
-        $collection = CreateCollection::with(
+        $collection = Collection::create(
             $collectionName,
             [
                 'keyOptions' => [
@@ -65,7 +66,7 @@ final class SingleStreamStrategy implements PersistenceStrategy
             ]
         );
 
-        $aggregateIndex = CreateIndex::with(
+        $aggregateIndex = Index::create(
             $collectionName,
             [
                 'type' => 'skiplist',
@@ -80,7 +81,7 @@ final class SingleStreamStrategy implements PersistenceStrategy
             ]
         );
 
-        $aggregateLookupIndex = CreateIndex::with(
+        $aggregateLookupIndex = Index::create(
             $collectionName,
             [
                 'type' => 'skiplist',
@@ -95,7 +96,7 @@ final class SingleStreamStrategy implements PersistenceStrategy
             ]
         );
 
-        $eventIdIndex = CreateIndex::with(
+        $eventIdIndex = Index::create(
             $collectionName,
             [
                 'type' => 'hash',
@@ -108,7 +109,7 @@ final class SingleStreamStrategy implements PersistenceStrategy
             ]
         );
 
-        $sortingIndex = CreateIndex::with(
+        $sortingIndex = Index::create(
             $collectionName,
             [
                 'type' => 'skiplist',
@@ -149,6 +150,6 @@ final class SingleStreamStrategy implements PersistenceStrategy
 
     public function generateCollectionName(StreamName $streamName): string
     {
-        return 'c' . sha1($streamName->toString());
+        return 'c' . \sha1($streamName->toString());
     }
 }
