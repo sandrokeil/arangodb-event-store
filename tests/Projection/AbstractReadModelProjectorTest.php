@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -12,6 +13,8 @@ declare(strict_types=1);
 
 namespace ProophTest\EventStore\ArangoDb\Projection;
 
+use ArangoDb\Handler\StatementHandler;
+use ArangoDb\Http\TypeSupport;
 use ArrayIterator;
 use Prooph\Common\Messaging\FQCNMessageFactory;
 use Prooph\Common\Messaging\Message;
@@ -30,8 +33,6 @@ use ProophTest\EventStore\Mock\ReadModelMock;
 use ProophTest\EventStore\Mock\UserCreated;
 use ProophTest\EventStore\Mock\UsernameChanged;
 use ProophTest\EventStore\Projection\AbstractEventStoreReadModelProjectorTest;
-use Psr\Http\Client\ClientExceptionInterface;
-use Psr\Http\Client\ClientInterface;
 
 abstract class AbstractReadModelProjectorTest extends AbstractEventStoreReadModelProjectorTest
 {
@@ -46,7 +47,7 @@ abstract class AbstractReadModelProjectorTest extends AbstractEventStoreReadMode
     protected $eventStore;
 
     /**
-     * @var ClientExceptionInterface
+     * @var TypeSupport
      */
     private $client;
 
@@ -61,9 +62,10 @@ abstract class AbstractReadModelProjectorTest extends AbstractEventStoreReadMode
         $this->eventStore = new ArangoDbEventStore(
             new FQCNMessageFactory(),
             $this->client,
+            TestUtil::getStatementHandler(),
             $this->getPersistenceStrategy()
         );
-        $this->projectionManager = new ProjectionManager($this->eventStore, $this->client);
+        $this->projectionManager = new ProjectionManager($this->eventStore, $this->client, TestUtil::getStatementHandler());
     }
 
     protected function tearDown(): void
@@ -148,10 +150,12 @@ abstract class AbstractReadModelProjectorTest extends AbstractEventStoreReadMode
         $eventStore = $this->prophesize(ProophEventStore::class);
         $wrappedEventStore = $this->prophesize(EventStoreDecorator::class);
         $wrappedEventStore->getInnerEventStore()->willReturn($eventStore->reveal())->shouldBeCalled();
+        $statementHandler = $this->prophesize(StatementHandler::class);
 
         new ReadModelProjector(
             $wrappedEventStore->reveal(),
             $this->client,
+            $statementHandler->reveal(),
             'test_projection',
             new ReadModelMock(),
             'event_streams',
@@ -170,12 +174,14 @@ abstract class AbstractReadModelProjectorTest extends AbstractEventStoreReadMode
         $this->expectException(InvalidArgumentException::class);
 
         $eventStore = $this->prophesize(ProophEventStore::class);
-        $connection = $this->prophesize(ClientInterface::class);
+        $connection = $this->prophesize(TypeSupport::class);
         $readModel = $this->prophesize(ReadModel::class);
+        $statementHandler = $this->prophesize(StatementHandler::class);
 
         new ReadModelProjector(
             $eventStore->reveal(),
             $connection->reveal(),
+            $statementHandler->reveal(),
             'test_projection',
             $readModel->reveal(),
             'event_streams',
@@ -218,5 +224,29 @@ abstract class AbstractReadModelProjectorTest extends AbstractEventStoreReadMode
             SIGUSR1,
             $processDetails['exitcode']
         );
+    }
+
+    /**
+     * @test
+     */
+    public function it_detects_gap_and_performs_retry(): void
+    {
+        $this->markTestSkipped('Find out how to test it!');
+    }
+
+    /**
+     * @test
+     */
+    public function it_continues_when_retry_limit_is_reached_and_gap_not_filled(): void
+    {
+        $this->markTestSkipped('Find out how to test it!');
+    }
+
+    /**
+     * @test
+     */
+    public function it_does_not_perform_retry_when_event_is_older_than_detection_window(): void
+    {
+        $this->markTestSkipped('Find out how to test it!');
     }
 }

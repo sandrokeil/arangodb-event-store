@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -12,18 +13,18 @@ declare(strict_types=1);
 
 namespace ProophTest\EventStore\ArangoDb\Projection;
 
+use ArangoDb\Http\TypeSupport;
 use Prooph\Common\Messaging\FQCNMessageFactory;
 use Prooph\EventStore\ArangoDb\ArangoDbEventStore;
 use Prooph\EventStore\ArangoDb\PersistenceStrategy;
 use Prooph\EventStore\ArangoDb\Projection\ProjectionManager;
 use ProophTest\EventStore\ArangoDb\TestUtil;
 use ProophTest\EventStore\Projection\AbstractEventStoreQueryTest as BaseTestCase;
-use Psr\Http\Client\ClientExceptionInterface;
 
 abstract class AbstractQueryTest extends BaseTestCase
 {
     /**
-     * @var ClientExceptionInterface
+     * @var TypeSupport
      */
     private $client;
 
@@ -38,9 +39,10 @@ abstract class AbstractQueryTest extends BaseTestCase
         $this->eventStore = new ArangoDbEventStore(
             new FQCNMessageFactory(),
             $this->client,
+            TestUtil::getStatementHandler(),
             $this->getPersistenceStrategy()
         );
-        $this->projectionManager = new ProjectionManager($this->eventStore, $this->client);
+        $this->projectionManager = new ProjectionManager($this->eventStore, $this->client, TestUtil::getStatementHandler());
     }
 
     protected function tearDown(): void

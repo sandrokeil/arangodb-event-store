@@ -13,8 +13,12 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Exception;
 
-use Prooph\EventStore\Exception\EventStoreException;
-
-interface ArangoDbEventStoreException extends EventStoreException
+final class WrongTypeClass extends LogicException
 {
+    public static function forType(string $type, string $fqcn)
+    {
+        return new self(
+            \sprintf('The provided class name "%s" does not implement "%s".', $fqcn, $type)
+        );
+    }
 }

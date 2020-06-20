@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -21,16 +22,19 @@ use ProophTest\EventStore\Mock\UserCreated;
 require __DIR__ . '/../../vendor/autoload.php';
 
 $connection = TestUtil::getClient();
+$statementHandler = TestUtil::getStatementHandler();
 
 $eventStore = new ArangoDbEventStore(
     new FQCNMessageFactory(),
     $connection,
+    $statementHandler,
     new SimpleStreamStrategy()
 );
 
 $projectionManager = new ProjectionManager(
     $eventStore,
-    $connection
+    $connection,
+    $statementHandler
 );
 $projection = $projectionManager->createProjection(
     'test_projection',

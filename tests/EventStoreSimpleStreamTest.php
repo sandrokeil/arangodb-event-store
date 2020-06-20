@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -37,6 +38,7 @@ class EventStoreSimpleStreamTest extends AbstractEventStoreTest
         $this->eventStore = new ArangoDbEventStore(
             new FQCNMessageFactory(),
             $this->client,
+            TestUtil::getStatementHandler(),
             $this->getPersistenceStrategy()
         );
     }

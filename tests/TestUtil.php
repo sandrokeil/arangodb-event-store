@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -12,36 +13,127 @@ declare(strict_types=1);
 
 namespace ProophTest\EventStore\ArangoDb;
 
-use ArangoDb\Client;
-use ArangoDb\ClientOptions;
-use ArangoDb\TransactionalClient;
+use ArangoDb\Handler\Statement;
+use ArangoDb\Http\Client;
+use ArangoDb\Http\ClientOptions;
+use ArangoDb\Http\TransactionalClient;
+use ArangoDb\Http\TransactionSupport;
+use ArangoDb\Http\TypeSupport;
+use ArangoDb\Statement\ArrayStreamHandlerFactory;
+use ArangoDb\Statement\StreamHandlerFactoryInterface;
 use ArangoDb\Type\Batch;
 use ArangoDb\Type\Collection;
 use ArangoDb\Type\Database;
-use Psr\Http\Client\ClientInterface;
-use function Prooph\EventStore\ArangoDb\Fn\eventStreamsBatch;
-use function Prooph\EventStore\ArangoDb\Fn\projectionsBatch;
+use Fig\Http\Message\StatusCodeInterface;
+use Laminas\Diactoros\Request;
+use Laminas\Diactoros\Response;
+use Laminas\Diactoros\StreamFactory;
+use function Prooph\EventStore\ArangoDb\Func\eventStreamsBatch;
+use function Prooph\EventStore\ArangoDb\Func\projectionsBatch;
+use Psr\Http\Message\RequestFactoryInterface;
+use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\ResponseFactoryInterface;
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\StreamFactoryInterface;
 
 final class TestUtil
 {
-    public static function getClient(): TransactionalClient
-    {
-        $type = 'application/' . (\getenv('USE_VPACK') === 'true' ? 'x-velocypack' : 'json');
-        $params = self::getConnectionParams();
+    /**
+     * @var Client
+     */
+    private static $connection;
 
-        return new TransactionalClient(
-            new Client(
-            $params,
-            [
-                'Content-Type' => [$type],
-                'Accept' => [$type],
-            ]
-        ));
+    /**
+     * @var TransactionalClient
+     */
+    private static $transactionalConnection;
+
+    public static function getStatementHandler(): Statement
+    {
+        return new Statement(self::getClient(), self::getStreamHandlerFactory());
+    }
+
+    public static function getClient($sharedConnection = false): TypeSupport
+    {
+        if (! isset(self::$connection) || ! $sharedConnection) {
+            $params = self::getConnectionParams();
+
+            $connection = new Client(
+                $params,
+                self::getRequestFactory(),
+                self::getResponseFactory(),
+                self::getStreamFactory()
+            );
+            if (! $sharedConnection) {
+                return $connection;
+            }
+            self::$connection = $connection;
+        }
+
+        return self::$connection;
+    }
+
+    public static function getTransactionalClient($sharedConnection = false): TransactionSupport
+    {
+        if (! isset(self::$transactionalConnection) || ! $sharedConnection) {
+            $connection = new TransactionalClient(
+                self::getClient(),
+                self::getResponseFactory()
+            );
+
+            if (! $sharedConnection) {
+                return $connection;
+            }
+
+            self::$transactionalConnection = $connection;
+        }
+
+        return self::$transactionalConnection;
+    }
+
+    public static function getResponseFactory(): ResponseFactoryInterface
+    {
+        return new class() implements ResponseFactoryInterface {
+            public function createResponse(int $code = 200, string $reasonPhrase = ''): ResponseInterface
+            {
+                $response = new Response();
+
+                if ($reasonPhrase !== '') {
+                    return $response->withStatus($code, $reasonPhrase);
+                }
+
+                return $response->withStatus($code);
+            }
+        };
+    }
+
+    public static function getRequestFactory(): RequestFactoryInterface
+    {
+        return new class() implements RequestFactoryInterface {
+            public function createRequest(string $method, $uri): RequestInterface
+            {
+                $type = 'application/json';
+
+                $request = new Request($uri, $method);
+                $request = $request->withAddedHeader('Content-Type', $type);
+
+                return $request->withAddedHeader('Accept', $type);
+            }
+        };
+    }
+
+    public static function getStreamFactory(): StreamFactoryInterface
+    {
+        return new StreamFactory();
+    }
+
+    public static function getStreamHandlerFactory(): StreamHandlerFactoryInterface
+    {
+        return new ArrayStreamHandlerFactory();
     }
 
     public static function createDatabase(): void
     {
-        $type = 'application/' . (\getenv('USE_VPACK') === 'true' ? 'x-velocypack' : 'json');
         $params = self::getConnectionParams();
 
         if ($params[ClientOptions::OPTION_DATABASE] === '_system') {
@@ -50,19 +142,19 @@ final class TestUtil
 
         $params[ClientOptions::OPTION_DATABASE] = '_system';
 
-        $client = new Client(
-            $params,
-            [
-                'Content-Type' => [$type],
-                'Accept' => [$type],
-            ]
+        $client = new Client($params, self::getRequestFactory(), self::getResponseFactory(), self::getStreamFactory());
+        $response = $client->sendRequest(
+            Database::create(self::getDatabaseName())->toRequest(self::getRequestFactory(), self::getStreamFactory())
         );
-        $client->sendRequest(Database::create(self::getDatabaseName())->toRequest());
+
+        if ($response->getStatusCode() !== StatusCodeInterface::STATUS_CREATED) {
+            self::dropDatabase();
+            throw new \RuntimeException($response->getBody()->getContents());
+        }
     }
 
     public static function dropDatabase(): void
     {
-        $type = 'application/json';
         $params = self::getConnectionParams();
 
         if ($params[ClientOptions::OPTION_DATABASE] === '_system') {
@@ -73,12 +165,13 @@ final class TestUtil
 
         $client = new Client(
             $params,
-            [
-                'Content-Type' => [$type],
-                'Accept' => [$type],
-            ]
+            self::getRequestFactory(),
+            self::getResponseFactory(),
+            self::getStreamFactory()
         );
-        $client->sendRequest(Database::delete(self::getDatabaseName())->toRequest());
+        $client->sendRequest(
+            Database::delete(self::getDatabaseName())->toRequest(self::getRequestFactory(), self::getStreamFactory())
+        );
     }
 
     public static function getDatabaseName(): string
@@ -99,21 +192,21 @@ final class TestUtil
         return self::getSpecifiedConnectionParams();
     }
 
-    public static function setupCollections(ClientInterface $connection): void
+    public static function setupCollections(TypeSupport $connection): void
     {
-        $connection->sendRequest(
-            Batch::fromTypes(...eventStreamsBatch())->toRequest()
+        $connection->sendType(
+            Batch::fromTypes(...eventStreamsBatch())
         );
-        $connection->sendRequest(
-            Batch::fromTypes(...projectionsBatch())->toRequest()
+        $connection->sendType(
+            Batch::fromTypes(...projectionsBatch())
         );
     }
 
-    public static function deleteCollection(ClientInterface $connection, string $collection): void
+    public static function deleteCollection(TypeSupport $connection, string $collection): void
     {
         try {
-            $connection->sendRequest(
-                Collection::delete($collection)->toRequest()
+            $connection->sendType(
+                Collection::delete($collection)
             );
         } catch (\Throwable $e) {
             // needed if test deletes collection

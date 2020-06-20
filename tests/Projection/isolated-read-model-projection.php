@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -49,16 +50,19 @@ $readModel = new class() implements ReadModel {
 };
 
 $connection = TestUtil::getClient();
+$statementHandler = TestUtil::getStatementHandler();
 
 $eventStore = new ArangoDbEventStore(
     new FQCNMessageFactory(),
     $connection,
+    $statementHandler,
     new SimpleStreamStrategy()
 );
 
 $projectionManager = new ProjectionManager(
     $eventStore,
-    $connection
+    $connection,
+    $statementHandler
 );
 $projection = $projectionManager->createReadModelProjection(
     'test_projection',

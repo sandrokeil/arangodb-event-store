@@ -23,18 +23,18 @@
     "require": {
         "php": "^7.1",
         "ext-json": "*",
-        "prooph/event-store": "^7.2",
-        "prooph/standard-projections": "^1.0",
-        "sandrokeil/arangodb-php-client": "dev-master"
+        "prooph/event-store": "^7.5.3",
+        "sandrokeil/arangodb-php-client": "dev-feature/improve-statement"
     },
     "require-dev": {
         "roave/security-advisories": "dev-master",
         "container-interop/container-interop": "^1.1",
         "sandrokeil/interop-config": "2.1",
-        "phpunit/phpunit": "^6.0",
-        "phpspec/prophecy": "^1.7",
-        "prooph/php-cs-fixer-config": "^0.2.1",
-        "malukenho/docheader": "^0.1.7"
+        "phpunit/phpunit": "^7.1",
+        "phpspec/prophecy": "^1.8",
+        "prooph/php-cs-fixer-config": "^0.3.1",
+        "malukenho/docheader": "^0.1.8",
+        "laminas/laminas-diactoros": "^2.3.0"
     },
     "suggest": {
         "psr/container": "^1.0 for usage of provided factories",
@@ -47,7 +47,7 @@
         "psr-4": {
             "Prooph\\EventStore\\ArangoDb\\": "src/"
         },
-        "files": ["src/Fn.php"]
+        "files": ["src/Func.php"]
     },
     "autoload-dev": {
         "psr-4": {

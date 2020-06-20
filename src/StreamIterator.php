@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -12,7 +13,7 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb;
 
-use ArangoDb\Statement;
+use ArangoDb\Statement\Statement;
 use DateTimeImmutable;
 use DateTimeZone;
 use Prooph\Common\Messaging\Message;
@@ -53,19 +54,17 @@ final class StreamIterator implements \Prooph\EventStore\StreamIterator\StreamIt
         MessageFactory $messageFactory
     ) {
         $this->cursor = $cursor;
-        $this->cursor->rewind();
         $this->positionOffset = $positionOffset;
         $this->messageFactory = $messageFactory;
+
+        $this->next();
     }
 
     public function current(): ?Message
     {
-        $this->currentItem = $this->cursor->current();
-
-        if ($this->currentItem === null) {
+        if (false === $this->currentItem) {
             return null;
         }
-        $this->currentItem = \json_decode($this->currentItem, true);
         $createdAt = $this->currentItem['created_at'];
 
         if (\strlen($createdAt) === 19) {
@@ -100,7 +99,19 @@ final class StreamIterator implements \Prooph\EventStore\StreamIterator\StreamIt
 
     public function next()
     {
-        $this->cursor->next();
+        if ($this->currentKey === -1) {
+            $this->rewind();
+        } else {
+            $this->cursor->next();
+        }
+
+        if (false === $this->cursor->valid()) {
+            $this->currentItem = false;
+            $this->currentKey = -1;
+        } else {
+            $this->currentKey++;
+            $this->currentItem = $this->cursor->current();
+        }
     }
 
     public function key()
@@ -109,27 +120,21 @@ final class StreamIterator implements \Prooph\EventStore\StreamIterator\StreamIt
             return ((int) $this->currentItem['no']) - $this->positionOffset + 1;
         }
 
-        return null;
+        return false;
     }
 
     public function valid()
     {
-        $valid = $this->cursor->valid();
-
-        if ($valid) {
-            $this->currentItem = $this->cursor->current();
-        }
-
-        return $valid;
+        return $this->cursor->valid();
     }
 
     public function rewind()
     {
         //Only perform rewind if current item is not the first element
-        if ($this->currentKey !== 0) {
+        if ($this->currentKey !== -1) {
             $this->cursor->rewind();
-            $this->currentItem = null;
-            $this->currentKey = -1;
+            $this->currentItem = $this->cursor->current();
+            $this->currentKey = 0;
         }
     }
 }

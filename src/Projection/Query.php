@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -13,10 +14,8 @@ declare(strict_types=1);
 namespace Prooph\EventStore\ArangoDb\Projection;
 
 use ArangoDb\Exception\ServerException;
-use ArangoDb\Statement;
-use ArangoDb\Type\Cursor;
+use ArangoDb\Handler\StatementHandler;
 use Closure;
-use Iterator;
 use Prooph\Common\Messaging\Message;
 use Prooph\EventStore\ArangoDb\EventStore as ArangoDbEventStore;
 use Prooph\EventStore\ArangoDb\Exception\RuntimeException;
@@ -25,8 +24,8 @@ use Prooph\EventStore\EventStoreDecorator;
 use Prooph\EventStore\Exception;
 use Prooph\EventStore\Metadata\MetadataMatcher;
 use Prooph\EventStore\Projection\Query as ProophQuery;
+use Prooph\EventStore\StreamIterator\MergedStreamIterator;
 use Prooph\EventStore\StreamName;
-use Psr\Http\Client\ClientInterface;
 
 final class Query implements ProophQuery
 {
@@ -34,11 +33,6 @@ final class Query implements ProophQuery
      * @var EventStore
      */
     private $eventStore;
-
-    /**
-     * @var ClientInterface
-     */
-    private $client;
 
     /**
      * @var string
@@ -90,11 +84,26 @@ final class Query implements ProophQuery
      */
     private $metadataMatcher;
 
-    public function __construct(EventStore $eventStore, ClientInterface $client, string $eventStreamsTable)
-    {
+    /**
+     * @var StatementHandler
+     */
+    protected $statementHandler;
+
+    /**
+     * @var bool
+     */
+    private $triggerPcntlSignalDispatch;
+
+    public function __construct(
+        EventStore $eventStore,
+        StatementHandler $statementHandler,
+        string $eventStreamsTable,
+        bool $triggerPcntlSignalDispatch = false
+    ) {
         $this->eventStore = $eventStore;
-        $this->client = $client;
+        $this->statementHandler = $statementHandler;
         $this->eventStreamsTable = $eventStreamsTable;
+        $this->triggerPcntlSignalDispatch = $triggerPcntlSignalDispatch;
 
         while ($eventStore instanceof EventStoreDecorator) {
             $eventStore = $eventStore->getInnerEventStore();
@@ -259,18 +268,22 @@ final class Query implements ProophQuery
         $this->isStopped = false;
         $this->prepareStreamPositions();
 
+        $eventStreams = [];
+
         foreach ($this->streamPositions as $streamName => $position) {
             try {
-                $streamEvents = $this->eventStore->load(new StreamName($streamName), $position + 1, null, $this->metadataMatcher);
+                $eventStreams[$streamName] = $this->eventStore->load(new StreamName($streamName), $position + 1, null, $this->metadataMatcher);
             } catch (Exception\StreamNotFound $e) {
                 // ignore
                 continue;
             }
 
+            $streamEvents = new MergedStreamIterator(\array_keys($eventStreams), ...\array_values($eventStreams));
+
             if ($singleHandler) {
-                $this->handleStreamWithSingleHandler($streamName, $streamEvents);
+                $this->handleStreamWithSingleHandler($streamEvents);
             } else {
-                $this->handleStreamWithHandlers($streamName, $streamEvents);
+                $this->handleStreamWithHandlers($streamEvents);
             }
 
             if ($this->isStopped) {
@@ -279,14 +292,18 @@ final class Query implements ProophQuery
         }
     }
 
-    private function handleStreamWithSingleHandler(string $streamName, Iterator $events): void
+    private function handleStreamWithSingleHandler(MergedStreamIterator $events): void
     {
-        $this->currentStreamName = $streamName;
         $handler = $this->handler;
 
-        foreach ($events as $event) {
-            /* @var Message $event */
-            $this->streamPositions[$streamName]++;
+        /* @var Message $event */
+        foreach ($events as $key => $event) {
+            if ($this->triggerPcntlSignalDispatch) {
+                \pcntl_signal_dispatch();
+            }
+
+            $this->currentStreamName = $events->streamName();
+            $this->streamPositions[$this->currentStreamName] = $key;
 
             $result = $handler($this->state, $event);
 
@@ -300,15 +317,22 @@ final class Query implements ProophQuery
         }
     }
 
-    private function handleStreamWithHandlers(string $streamName, Iterator $events): void
+    private function handleStreamWithHandlers(MergedStreamIterator $events): void
     {
-        $this->currentStreamName = $streamName;
+        /* @var Message $event */
+        foreach ($events as $key => $event) {
+            if ($this->triggerPcntlSignalDispatch) {
+                \pcntl_signal_dispatch();
+            }
 
-        foreach ($events as $event) {
-            /* @var Message $event */
-            $this->streamPositions[$streamName]++;
+            $this->currentStreamName = $events->streamName();
+            $this->streamPositions[$this->currentStreamName] = $key;
 
             if (! isset($this->handlers[$event->messageName()])) {
+                if ($this->isStopped) {
+                    break;
+                }
+
                 continue;
             }
 
@@ -370,16 +394,12 @@ RETURN {
 EOF;
 
             try {
-                $cursor = new Statement(
-                    $this->client,
-                    Cursor::create(
-                        $aql,
-                        [
-                            '@collection' => $this->eventStreamsTable,
-                        ],
-                        1000
-                    )->toRequest(),
-                    [Statement::ENTRY_TYPE => Statement::ENTRY_TYPE_ARRAY]
+                $cursor = $this->statementHandler->create(
+                    $aql,
+                    [
+                        '@collection' => $this->eventStreamsTable,
+                    ],
+                    1000
                 );
 
                 $cursor->rewind();
@@ -404,17 +424,13 @@ RETURN {
 }
 EOF;
             try {
-                $cursor = new Statement(
-                    $this->client,
-                    Cursor::create(
-                        $aql,
-                        [
-                            '@collection' => $this->eventStreamsTable,
-                            'categories' => $this->query['categories'],
-                        ],
-                        1000
-                    )->toRequest(),
-                    [Statement::ENTRY_TYPE => Statement::ENTRY_TYPE_ARRAY]
+                $cursor = $this->statementHandler->create(
+                    $aql,
+                    [
+                        '@collection' => $this->eventStreamsTable,
+                        'categories' => $this->query['categories'],
+                    ],
+                    1000
                 );
 
                 $cursor->rewind();

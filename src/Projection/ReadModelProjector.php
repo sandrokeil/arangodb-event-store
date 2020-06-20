@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -13,15 +14,15 @@ declare(strict_types=1);
 namespace Prooph\EventStore\ArangoDb\Projection;
 
 use ArangoDb\Exception\ServerException;
-use ArangoDb\HttpHelper;
-use ArangoDb\Statement;
-use ArangoDb\Type\Cursor;
+use ArangoDb\Handler\StatementHandler;
+use ArangoDb\Http\TypeSupport;
 use ArangoDb\Type\Document;
+use ArangoDb\Type\DocumentType;
+use ArangoDb\Util\Json;
 use Closure;
 use DateTimeImmutable;
 use DateTimeZone;
 use Fig\Http\Message\StatusCodeInterface;
-use Iterator;
 use Prooph\Common\Messaging\Message;
 use Prooph\EventStore\ArangoDb\EventStore as ArangoDbEventStore;
 use Prooph\EventStore\ArangoDb\Exception\ProjectionAlreadyExistsException;
@@ -31,9 +32,11 @@ use Prooph\EventStore\EventStore;
 use Prooph\EventStore\EventStoreDecorator;
 use Prooph\EventStore\Exception;
 use Prooph\EventStore\Metadata\MetadataMatcher;
+use Prooph\EventStore\Pdo\Projection\GapDetection;
 use Prooph\EventStore\Projection\ProjectionStatus;
 use Prooph\EventStore\Projection\ReadModel;
 use Prooph\EventStore\Projection\ReadModelProjector as ProophReadModelProjector;
+use Prooph\EventStore\StreamIterator\MergedStreamIterator;
 use Prooph\EventStore\StreamName;
 use Psr\Http\Client\ClientExceptionInterface;
 use Psr\Http\Client\ClientInterface;
@@ -136,18 +139,44 @@ final class ReadModelProjector implements ProophReadModelProjector
     private $triggerPcntlSignalDispatch;
 
     /**
+     * @var int
+     */
+    private $updateLockThreshold;
+
+    /**
+     * @var GapDetection|null
+     */
+    private $gapDetection;
+
+    /**
      * @var array|null
      */
     private $query;
+
+    /**
+     * @var DateTimeImmutable
+     */
+    private $lastLockUpdate;
 
     /**
      * @var MetadataMatcher|null
      */
     private $metadataMatcher;
 
+    /**
+     * @var StatementHandler
+     */
+    protected $statementHandler;
+
+    /**
+     * @var string
+     */
+    protected $documentClass = Document::class;
+
     public function __construct(
         EventStore $eventStore,
-        ClientInterface $client,
+        TypeSupport $client,
+        StatementHandler $statementHandler,
         string $name,
         ReadModel $readModel,
         string $eventStreamsTable,
@@ -155,7 +184,9 @@ final class ReadModelProjector implements ProophReadModelProjector
         int $lockTimeoutMs,
         int $persistBlockSize,
         int $sleep,
-        bool $triggerPcntlSignalDispatch = false
+        bool $triggerPcntlSignalDispatch = false,
+        int $updateLockThreshold = 0,
+        GapDetection $gapDetection = null
     ) {
         if ($triggerPcntlSignalDispatch && ! \extension_loaded('pcntl')) {
             throw Exception\ExtensionNotLoadedException::withName('pcntl');
@@ -163,6 +194,7 @@ final class ReadModelProjector implements ProophReadModelProjector
 
         $this->eventStore = $eventStore;
         $this->client = $client;
+        $this->statementHandler = $statementHandler;
         $this->name = $name;
         $this->readModel = $readModel;
         $this->eventStreamsTable = $eventStreamsTable;
@@ -172,13 +204,14 @@ final class ReadModelProjector implements ProophReadModelProjector
         $this->sleep = $sleep;
         $this->status = ProjectionStatus::IDLE();
         $this->triggerPcntlSignalDispatch = $triggerPcntlSignalDispatch;
+        $this->updateLockThreshold = $updateLockThreshold;
+        $this->gapDetection = $gapDetection;
 
         while ($eventStore instanceof EventStoreDecorator) {
             $eventStore = $eventStore->getInnerEventStore();
         }
 
-        if (! $eventStore instanceof ArangoDbEventStore
-        ) {
+        if (! $eventStore instanceof ArangoDbEventStore) {
             throw new Exception\InvalidArgumentException('Unknown event store instance given');
         }
     }
@@ -277,8 +310,7 @@ final class ReadModelProjector implements ProophReadModelProjector
                 throw new Exception\InvalidArgumentException('Invalid handler given, Closure expected');
             }
 
-            $this->handlers[$eventName] = Closure::bind($handler,
-                $this->createHandlerContext($this->currentStreamName));
+            $this->handlers[$eventName] = Closure::bind($handler, $this->createHandlerContext($this->currentStreamName));
         }
 
         return $this;
@@ -314,16 +346,16 @@ final class ReadModelProjector implements ProophReadModelProjector
         }
 
         try {
-            $update = Document::updateOne(
+            $update = ($this->documentClass)::updateOne(
                 $this->projectionsTable . '/' . $this->name,
                 [
                     'state' => $this->state,
                     'status' => ProjectionStatus::STOPPING()->getValue(),
                     'position' => $this->streamPositions,
                 ],
-                Document::FLAG_REPLACE_OBJECTS | Document::FLAG_SILENT
+                DocumentType::FLAG_REPLACE_OBJECTS | DocumentType::FLAG_SILENT
             );
-            $response = $this->client->sendRequest($update->toRequest());
+            $response = $this->client->sendType($update);
             $httpStatusCode = $response->getStatusCode();
 
             if ((
@@ -350,14 +382,14 @@ final class ReadModelProjector implements ProophReadModelProjector
         $this->isStopped = true;
 
         try {
-            $update = Document::updateOne(
+            $update = ($this->documentClass)::updateOne(
                 $this->projectionsTable . '/' . $this->name,
                 [
                     'status' => ProjectionStatus::IDLE()->getValue(),
                 ],
-                Document::FLAG_SILENT
+                DocumentType::FLAG_SILENT
             );
-            $response = $this->client->sendRequest($update->toRequest());
+            $response = $this->client->sendType($update);
             $httpStatusCode = $response->getStatusCode();
 
             if ((
@@ -377,8 +409,8 @@ final class ReadModelProjector implements ProophReadModelProjector
     public function delete(bool $deleteProjection): void
     {
         try {
-            $delete = Document::deleteOne($this->projectionsTable . '/' . $this->name);
-            $response = $this->client->sendRequest($delete->toRequest());
+            $delete = ($this->documentClass)::deleteOne($this->projectionsTable . '/' . $this->name);
+            $response = $this->client->sendType($delete);
 
             $httpStatusCode = $response->getStatusCode();
 
@@ -440,6 +472,7 @@ final class ReadModelProjector implements ProophReadModelProjector
 
         switch ($this->fetchRemoteStatus()) {
             case ProjectionStatus::STOPPING():
+                $this->load();
                 $this->stop();
 
                 return;
@@ -458,7 +491,10 @@ final class ReadModelProjector implements ProophReadModelProjector
                 break;
         }
 
-        $this->createProjection();
+        if (! $this->projectionExists()) {
+            $this->createProjection();
+        }
+
         $this->acquireLock();
 
         if (! $this->readModel->isInitialized()) {
@@ -474,30 +510,39 @@ final class ReadModelProjector implements ProophReadModelProjector
 
         try {
             do {
+                $eventStreams = [];
+
                 foreach ($this->streamPositions as $streamName => $position) {
                     try {
-                        $streamEvents = $this->eventStore->load(new StreamName($streamName), $position + 1, null, $this->metadataMatcher);
+                        $eventStreams[$streamName] = $this->eventStore->load(new StreamName($streamName), $position + 1, null, $this->metadataMatcher);
                     } catch (Exception\StreamNotFound $e) {
                         // ignore
                         continue;
                     }
+                }
+                $streamEvents = new MergedStreamIterator(\array_keys($eventStreams), ...\array_values($eventStreams));
 
-                    if ($singleHandler) {
-                        $this->handleStreamWithSingleHandler($streamName, $streamEvents);
-                    } else {
-                        $this->handleStreamWithHandlers($streamName, $streamEvents);
-                    }
-
-                    if ($this->isStopped) {
-                        break;
-                    }
+                if ($singleHandler) {
+                    $gapDetected = ! $this->handleStreamWithSingleHandler($streamEvents);
+                } else {
+                    $gapDetected = ! $this->handleStreamWithHandlers($streamEvents);
                 }
 
-                if (0 === $this->eventCounter) {
-                    \usleep($this->sleep);
-                    $this->updateLock();
-                } else {
+                if ($gapDetected && $this->gapDetection) {
+                    $sleep = $this->gapDetection->getSleepForNextRetry();
+
+                    \usleep($sleep);
+                    $this->gapDetection->trackRetry();
                     $this->persist();
+                } else {
+                    $this->gapDetection && $this->gapDetection->resetRetries();
+
+                    if (0 === $this->eventCounter) {
+                        \usleep($this->sleep);
+                        $this->updateLock();
+                    } else {
+                        $this->persist();
+                    }
                 }
 
                 $this->eventCounter = 0;
@@ -518,6 +563,10 @@ final class ReadModelProjector implements ProophReadModelProjector
                         break;
                     case ProjectionStatus::RESETTING():
                         $this->reset();
+
+                        if ($keepRunning) {
+                            $this->startAgain();
+                        }
                         break;
                     default:
                         break;
@@ -540,8 +589,8 @@ final class ReadModelProjector implements ProophReadModelProjector
         $response = null;
 
         try {
-            $read = Document::read($this->projectionsTable . '/' . $this->name);
-            $response = $this->client->sendRequest($read->toRequest());
+            $read = ($this->documentClass)::read($this->projectionsTable . '/' . $this->name);
+            $response = $this->client->sendType($read);
             $httpStatusCode = $response->getStatusCode();
 
             if ((
@@ -558,7 +607,10 @@ final class ReadModelProjector implements ProophReadModelProjector
         if (! $response) {
             return ProjectionStatus::RUNNING();
         }
-        $status = HttpHelper::responseContentAsArray($response, 'status');
+
+        if ($content = $response->getBody()->getContents()) {
+            $status = Json::decode($content)['status'] ?? '';
+        }
 
         if (empty($status)) {
             return ProjectionStatus::RUNNING();
@@ -567,17 +619,25 @@ final class ReadModelProjector implements ProophReadModelProjector
         return ProjectionStatus::byValue($status);
     }
 
-    private function handleStreamWithSingleHandler(string $streamName, Iterator $events): void
+    private function handleStreamWithSingleHandler(MergedStreamIterator $events): bool
     {
-        $this->currentStreamName = $streamName;
         $handler = $this->handler;
 
+        /* @var Message $event */
         foreach ($events as $key => $event) {
             if ($this->triggerPcntlSignalDispatch) {
                 \pcntl_signal_dispatch();
             }
-            /* @var Message $event */
-            $this->streamPositions[$streamName] = $key;
+            $this->currentStreamName = $events->streamName();
+
+            if ($this->gapDetection
+                && $this->gapDetection->isGapInStreamPosition((int) $this->streamPositions[$this->currentStreamName], (int) $key)
+                && $this->gapDetection->shouldRetryToFillGap(new \DateTimeImmutable('now', new DateTimeZone('UTC')), $event)
+            ) {
+                return false;
+            }
+
+            $this->streamPositions[$this->currentStreamName] = $key;
             $this->eventCounter++;
 
             $result = $handler($this->state, $event);
@@ -586,39 +646,43 @@ final class ReadModelProjector implements ProophReadModelProjector
                 $this->state = $result;
             }
 
-            if ($this->eventCounter === $this->persistBlockSize) {
-                $this->persist();
-                $this->eventCounter = 0;
-
-                $this->status = $this->fetchRemoteStatus();
-
-                if (! $this->status->is(ProjectionStatus::RUNNING()) && ! $this->status->is(ProjectionStatus::IDLE())) {
-                    $this->isStopped = true;
-                }
-            }
+            $this->persistAndFetchRemoteStatusWhenBlockSizeThresholdReached();
 
             if ($this->isStopped) {
                 break;
             }
         }
+
+        return true;
     }
 
-    private function handleStreamWithHandlers(string $streamName, Iterator $events): void
+    private function handleStreamWithHandlers(MergedStreamIterator $events): bool
     {
-        $this->currentStreamName = $streamName;
-
+        /* @var Message $event */
         foreach ($events as $key => $event) {
             if ($this->triggerPcntlSignalDispatch) {
                 \pcntl_signal_dispatch();
             }
-            /* @var Message $event */
-            $this->streamPositions[$streamName] = $key;
+            $this->currentStreamName = $events->streamName();
+
+            if ($this->gapDetection
+                && $this->gapDetection->isGapInStreamPosition((int) $this->streamPositions[$this->currentStreamName], (int) $key)
+                && $this->gapDetection->shouldRetryToFillGap(new \DateTimeImmutable('now', new DateTimeZone('UTC')), $event)
+            ) {
+                return false;
+            }
+            $this->streamPositions[$this->currentStreamName] = $key;
+            $this->eventCounter++;
 
             if (! isset($this->handlers[$event->messageName()])) {
+                $this->persistAndFetchRemoteStatusWhenBlockSizeThresholdReached();
+
+                if ($this->isStopped) {
+                    break;
+                }
+
                 continue;
             }
-
-            $this->eventCounter++;
 
             $handler = $this->handlers[$event->messageName()];
             $result = $handler($this->state, $event);
@@ -627,19 +691,26 @@ final class ReadModelProjector implements ProophReadModelProjector
                 $this->state = $result;
             }
 
-            if ($this->eventCounter === $this->persistBlockSize) {
-                $this->persist();
-                $this->eventCounter = 0;
-
-                $this->status = $this->fetchRemoteStatus();
-
-                if (! $this->status->is(ProjectionStatus::RUNNING()) && ! $this->status->is(ProjectionStatus::IDLE())) {
-                    $this->isStopped = true;
-                }
-            }
+            $this->persistAndFetchRemoteStatusWhenBlockSizeThresholdReached();
 
             if ($this->isStopped) {
                 break;
+            }
+        }
+
+        return true;
+    }
+
+    private function persistAndFetchRemoteStatusWhenBlockSizeThresholdReached(): void
+    {
+        if ($this->eventCounter === $this->persistBlockSize) {
+            $this->persist();
+            $this->eventCounter = 0;
+
+            $this->status = $this->fetchRemoteStatus();
+
+            if (! $this->status->is(ProjectionStatus::RUNNING()) && ! $this->status->is(ProjectionStatus::IDLE())) {
+                $this->isStopped = true;
             }
         }
     }
@@ -685,8 +756,8 @@ final class ReadModelProjector implements ProophReadModelProjector
         $response = null;
 
         try {
-            $read = Document::read($this->projectionsTable . '/' . $this->name);
-            $response = $this->client->sendRequest($read->toRequest());
+            $read = ($this->documentClass)::read($this->projectionsTable . '/' . $this->name);
+            $response = $this->client->sendType($read);
             $httpStatusCode = $response->getStatusCode();
 
             if ((
@@ -703,7 +774,9 @@ final class ReadModelProjector implements ProophReadModelProjector
         if (! $response) {
             return;
         }
-        $result = HttpHelper::responseContentAsArray($response);
+        if ($content = $response->getBody()->getContents()) {
+            $result = Json::decode($content);
+        }
 
         if (isset($result['position'], $result['state'])) {
             $this->streamPositions = \array_merge($this->streamPositions, $result['position']);
@@ -715,10 +788,34 @@ final class ReadModelProjector implements ProophReadModelProjector
         }
     }
 
+    private function projectionExists(): bool
+    {
+        // TODO check Document::readHEad
+        $aql = <<<'EOF'
+FOR c IN @@collection 
+    FILTER c.real_stream_name == @name 
+    COLLECT WITH COUNT INTO number 
+    RETURN {
+        number: number
+    }
+EOF;
+        $cursor = $this->statementHandler->create(
+            $aql,
+            [
+                '@collection' => $this->projectionsTable,
+                'name' => $this->name,
+            ]
+        );
+
+        $cursor->rewind();
+
+        return 1 === ($cursor->current()['number'] ?? 0);
+    }
+
     private function createProjection(): void
     {
         try {
-            $create = Document::create(
+            $create = ($this->documentClass)::create(
                 $this->projectionsTable,
                 [
                     '_key' => $this->name,
@@ -727,9 +824,9 @@ final class ReadModelProjector implements ProophReadModelProjector
                     'status' => $this->status->getValue(),
                     'locked_until' => null,
                 ],
-                Document::FLAG_SILENT
+                DocumentType::FLAG_SILENT
             );
-            $response = $this->client->sendRequest($create->toRequest());
+            $response = $this->client->sendType($create);
             $httpStatusCode = $response->getStatusCode();
 
             // we ignore any occurring error here (duplicate projection)
@@ -769,19 +866,15 @@ RETURN NEW
 EOF;
 
         try {
-            $cursor = new Statement(
-                $this->client,
-                Cursor::create(
-                    $aql,
-                    [
-                        '@collection' => $this->projectionsTable,
-                        'name' => $this->name,
-                        'lockedUntil' => $lockUntilString,
-                        'nowString' => $nowString,
-                        'status' => ProjectionStatus::RUNNING()->getValue(),
-                    ]
-                )->toRequest(),
-                [Statement::ENTRY_TYPE => Statement::ENTRY_TYPE_ARRAY]
+            $cursor = $this->statementHandler->create(
+                $aql,
+                [
+                    '@collection' => $this->projectionsTable,
+                    'name' => $this->name,
+                    'lockedUntil' => $lockUntilString,
+                    'nowString' => $nowString,
+                    'status' => ProjectionStatus::RUNNING()->getValue(),
+                ]
             );
 
             if (\count($cursor) === 0) {
@@ -795,6 +888,7 @@ EOF;
         }
 
         $this->status = ProjectionStatus::RUNNING();
+        $this->lastLockUpdate = $now;
     }
 
     private function updateLock(): void
@@ -803,12 +897,12 @@ EOF;
         $lockUntilString = $this->createLockUntilString($now);
 
         try {
-            $response = $this->client->sendRequest(
-                Document::updateOne(
+            $response = $this->client->sendType(
+                ($this->documentClass)::updateOne(
                     $this->projectionsTable . '/' . $this->name,
                     ['locked_until' => $lockUntilString],
-                    Document::FLAG_SILENT
-                )->toRequest()
+                    DocumentType::FLAG_SILENT
+                )
             );
             if ($response->getStatusCode() === StatusCodeInterface::STATUS_NOT_FOUND) {
                 throw ProjectionNotFound::with($this->name, $response->getBody()->getContents());
@@ -816,20 +910,21 @@ EOF;
         } catch (ClientExceptionInterface $e) {
             throw RuntimeException::fromServerException($e);
         }
+        $this->lastLockUpdate = $now;
     }
 
     private function releaseLock(): void
     {
         try {
-            $response = $this->client->sendRequest(
-                Document::updateOne(
+            $response = $this->client->sendType(
+                ($this->documentClass)::updateOne(
                     $this->projectionsTable . '/' . $this->name,
                     [
                         'status' => ProjectionStatus::IDLE()->getValue(),
                         'locked_until' => null,
                     ],
-                    Document::FLAG_SILENT
-                )->toRequest()
+                    DocumentType::FLAG_SILENT
+                )
             );
             $httpStatusCode = $response->getStatusCode();
 
@@ -856,16 +951,16 @@ EOF;
         $lockUntilString = $this->createLockUntilString($now);
 
         try {
-            $response = $this->client->sendRequest(
-                Document::updateOne(
+            $response = $this->client->sendType(
+                ($this->documentClass)::updateOne(
                     $this->projectionsTable . '/' . $this->name,
                     [
                         'position' => $this->streamPositions,
                         'state' => $this->state,
                         'locked_until' => $lockUntilString,
                     ],
-                    Document::FLAG_REPLACE_OBJECTS | Document::FLAG_SILENT
-                )->toRequest()
+                    DocumentType::FLAG_REPLACE_OBJECTS | DocumentType::FLAG_SILENT
+                )
             );
             $httpStatusCode = $response->getStatusCode();
 
@@ -896,16 +991,12 @@ RETURN {
 EOF;
 
             try {
-                $cursor = new Statement(
-                    $this->client,
-                    Cursor::create(
-                        $aql,
-                        [
-                            '@collection' => $this->eventStreamsTable,
-                        ],
-                        1000
-                    )->toRequest(),
-                    [Statement::ENTRY_TYPE => Statement::ENTRY_TYPE_ARRAY]
+                $cursor = $this->statementHandler->create(
+                    $aql,
+                    [
+                        '@collection' => $this->eventStreamsTable,
+                    ],
+                    1000
                 );
 
                 $cursor->rewind();
@@ -930,17 +1021,13 @@ RETURN {
 }
 EOF;
             try {
-                $cursor = new Statement(
-                    $this->client,
-                    Cursor::create(
-                        $aql,
-                        [
-                            '@collection' => $this->eventStreamsTable,
-                            'categories' => $this->query['categories'],
-                        ],
-                        1000
-                    )->toRequest(),
-                    [Statement::ENTRY_TYPE => Statement::ENTRY_TYPE_ARRAY]
+                $cursor = $this->statementHandler->create(
+                    $aql,
+                    [
+                        '@collection' => $this->eventStreamsTable,
+                        'categories' => $this->query['categories'],
+                    ],
+                    1000
                 );
 
                 $cursor->rewind();
@@ -977,5 +1064,60 @@ EOF;
         $resultMicros = \substr($micros, -6);
 
         return $from->modify('+' . $secs . ' seconds')->format('Y-m-d\TH:i:s') . '.' . $resultMicros;
+    }
+
+    private function shouldUpdateLock(DateTimeImmutable $now): bool
+    {
+        if ($this->lastLockUpdate === null || $this->updateLockThreshold === 0) {
+            return true;
+        }
+
+        $intervalSeconds = \floor($this->updateLockThreshold / 1000);
+
+        //Create an interval based on seconds
+        $updateLockThreshold = new \DateInterval("PT{$intervalSeconds}S");
+        //and manually add split seconds
+        $updateLockThreshold->f = ($this->updateLockThreshold % 1000) / 1000;
+
+        $threshold = $this->lastLockUpdate->add($updateLockThreshold);
+
+        return $threshold <= $now;
+    }
+
+    private function startAgain(): void
+    {
+        $this->isStopped = false;
+
+        $newStatus = ProjectionStatus::RUNNING();
+
+        $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+
+        try {
+            $response = $this->client->sendType(
+                ($this->documentClass)::updateOne(
+                    $this->projectionsTable . '/' . $this->name,
+                    [
+                        'status' => $newStatus->getValue(),
+                        'locked_until' => $this->createLockUntilString($now),
+                    ],
+                    DocumentType::FLAG_SILENT
+                )
+            );
+            $httpStatusCode = $response->getStatusCode();
+
+            if ((
+                    $httpStatusCode < StatusCodeInterface::STATUS_OK
+                    || $httpStatusCode > StatusCodeInterface::STATUS_MULTIPLE_CHOICES
+                )
+                && $httpStatusCode !== StatusCodeInterface::STATUS_NOT_FOUND
+            ) {
+                throw ProjectionNotFound::with($this->name, $response->getBody()->getContents());
+            }
+        } catch (ClientExceptionInterface $e) {
+            throw RuntimeException::fromServerException($e);
+        }
+
+        $this->status = $newStatus;
+        $this->lastLockUpdate = $now;
     }
 }

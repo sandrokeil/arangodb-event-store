@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -12,9 +13,9 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb;
 
-use ArangoDb\TransactionalClient;
-use ArangoDb\Type\Collection;
-use ArangoDb\Type\Document;
+use ArangoDb\Handler\StatementHandler;
+use ArangoDb\Http\TransactionSupport;
+use ArangoDb\Type\DocumentType;
 use Fig\Http\Message\StatusCodeInterface;
 use Iterator;
 use Prooph\Common\Messaging\MessageFactory;
@@ -33,7 +34,7 @@ use Psr\Http\Client\ClientExceptionInterface;
 final class ArangoDbTransactionalEventStore extends EventStore implements TransactionalEventStore
 {
     /**
-     * @var TransactionalClient
+     * @var TransactionSupport
      */
     protected $client;
 
@@ -56,7 +57,8 @@ final class ArangoDbTransactionalEventStore extends EventStore implements Transa
 
     public function __construct(
         MessageFactory $messageFactory,
-        TransactionalClient $client,
+        TransactionSupport $client,
+        StatementHandler $statementHandler,
         PersistenceStrategy $persistenceStrategy,
         int $loadBatchSize = 10000,
         string $eventStreamsCollection = 'event_streams',
@@ -65,6 +67,7 @@ final class ArangoDbTransactionalEventStore extends EventStore implements Transa
         parent::__construct(
             $messageFactory,
             $client,
+            $statementHandler,
             $persistenceStrategy,
             $loadBatchSize,
             $eventStreamsCollection
@@ -72,6 +75,7 @@ final class ArangoDbTransactionalEventStore extends EventStore implements Transa
         $this->eventStore = new ArangoDbEventStore(
             $messageFactory,
             $client,
+            $statementHandler,
             $persistenceStrategy,
             $loadBatchSize,
             $eventStreamsCollection
@@ -87,12 +91,12 @@ final class ArangoDbTransactionalEventStore extends EventStore implements Transa
             return;
         }
         $this->client->add(
-            Document::updateOne(
+            ($this->documentClass)::updateOne(
                 $this->eventStreamsCollection . '/' . $this->persistenceStrategy->generateCollectionName($streamName),
                 [
                     'metadata' => $newMetadata,
                 ],
-                Document::FLAG_REPLACE_OBJECTS | Document::FLAG_SILENT
+                DocumentType::FLAG_REPLACE_OBJECTS | DocumentType::FLAG_SILENT
             )->useGuard(StreamNotFoundGuard::withStreamName($streamName, true))
         );
     }
@@ -114,10 +118,10 @@ final class ArangoDbTransactionalEventStore extends EventStore implements Transa
         );
 
         $this->client->add(
-            Document::create(
+            ($this->documentClass)::create(
                 $this->eventStreamsCollection,
                 $this->createEventStreamData($stream),
-                Document::FLAG_SILENT
+                DocumentType::FLAG_SILENT
             )->useGuard(HttpStatusCodeGuard::withoutContentId(StatusCodeInterface::STATUS_CONFLICT))
         );
 
@@ -125,10 +129,10 @@ final class ArangoDbTransactionalEventStore extends EventStore implements Transa
 
         if (! empty($data)) {
             $this->client->add(
-                Document::create(
+                ($this->documentClass)::create(
                     $collectionName,
                     $data,
-                    Document::FLAG_SILENT
+                    DocumentType::FLAG_SILENT
                 )
             );
         }
@@ -150,10 +154,10 @@ final class ArangoDbTransactionalEventStore extends EventStore implements Transa
         }
 
         $this->client->add(
-            Document::create(
+            ($this->documentClass)::create(
                 $collectionName,
                 $data,
-                Document::FLAG_SILENT
+                DocumentType::FLAG_SILENT
             )->useGuard(HttpStatusCodeGuard::withoutContentId(StatusCodeInterface::STATUS_CONFLICT))
         );
     }
@@ -168,10 +172,10 @@ final class ArangoDbTransactionalEventStore extends EventStore implements Transa
         $collectionName = $this->persistenceStrategy->generateCollectionName($streamName);
 
         $this->client->addList(
-            Collection::delete(
+            ($this->collectionClass)::delete(
                 $collectionName
             )->useGuard(StreamNotFoundGuard::withStreamName($streamName)),
-            Document::deleteOne(
+            ($this->documentClass)::deleteOne(
                 $this->eventStreamsCollection . '/' . $collectionName
             )->useGuard(DeletedStreamNotFoundGuard::withStreamName($streamName))
         );

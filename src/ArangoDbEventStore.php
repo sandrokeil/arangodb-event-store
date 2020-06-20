@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -12,10 +13,8 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb;
 
-use ArangoDb\BatchResult;
 use ArangoDb\Type\Batch;
-use ArangoDb\Type\Collection;
-use ArangoDb\Type\Document;
+use ArangoDb\Type\DocumentType;
 use Fig\Http\Message\StatusCodeInterface;
 use Iterator;
 use Prooph\EventStore\ArangoDb\Exception\RuntimeException;
@@ -33,16 +32,15 @@ final class ArangoDbEventStore extends EventStore
     public function updateStreamMetadata(StreamName $streamName, array $newMetadata): void
     {
         try {
-            $response = $this->client->sendRequest(
-                Document::updateOne(
+            $this->client->sendType(
+                ($this->documentClass)::updateOne(
                     $this->eventStreamsCollection . '/' . $this->persistenceStrategy->generateCollectionName($streamName),
                     [
                         'metadata' => $newMetadata,
                     ],
-                    Document::FLAG_REPLACE_OBJECTS | Document::FLAG_SILENT
-                )->toRequest()
+                    DocumentType::FLAG_REPLACE_OBJECTS | DocumentType::FLAG_SILENT
+                )->useGuard(StreamNotFoundGuard::withStreamName($streamName))
             );
-            StreamNotFoundGuard::withStreamName($streamName)($response);
         } catch (ClientExceptionInterface $e) {
             throw RuntimeException::fromServerException($e);
         }
@@ -61,40 +59,38 @@ final class ArangoDbEventStore extends EventStore
                 StreamExistsGuard::withStreamName($streamName)
             )
             );
-            $response = $this->client->sendRequest($batch->toRequest());
+            $response = $this->client->sendType($batch);
 
             if ($response->getStatusCode() !== StatusCodeInterface::STATUS_OK) {
                 throw RuntimeException::fromResponse($response);
             }
-            BatchResult::fromResponse($response)->validateBatch($batch);
 
             $types = [
-                Document::create(
+                ($this->documentClass)::create(
                     $this->eventStreamsCollection,
                     $this->createEventStreamData($stream),
-                    Document::FLAG_SILENT
+                    DocumentType::FLAG_SILENT
                 )->useGuard(HttpStatusCodeGuard::withoutContentId(StatusCodeInterface::STATUS_CONFLICT)),
             ];
 
             $data = $this->persistenceStrategy->prepareData($stream->streamEvents());
 
             if (! empty($data)) {
-                $types[] = Document::create(
+                $types[] = ($this->documentClass)::create(
                     $collectionName,
                     $data,
-                    Document::FLAG_SILENT
+                    DocumentType::FLAG_SILENT
                 );
             }
 
             // save stream and events
             $batch = Batch::fromTypes(...$types);
 
-            $response = $this->client->sendRequest($batch->toRequest());
+            $response = $this->client->sendType($batch);
 
             if ($response->getStatusCode() !== StatusCodeInterface::STATUS_OK) {
                 throw RuntimeException::fromResponse($response);
             }
-            BatchResult::fromResponse($response)->validateBatch($batch);
         } catch (ClientExceptionInterface $e) {
             throw RuntimeException::fromServerException($e);
         }
@@ -111,12 +107,12 @@ final class ArangoDbEventStore extends EventStore
         }
 
         try {
-            $response = $this->client->sendRequest(
-                Document::create(
+            $response = $this->client->sendType(
+                ($this->documentClass)::create(
                     $collectionName,
                     $data,
-                    Document::FLAG_SILENT
-                )->toRequest()
+                    DocumentType::FLAG_SILENT
+                )
             );
             if ($response->getStatusCode() === StatusCodeInterface::STATUS_NOT_FOUND) {
                 throw StreamNotFound::with($streamName);
@@ -135,19 +131,18 @@ final class ArangoDbEventStore extends EventStore
             $collectionName = $this->persistenceStrategy->generateCollectionName($streamName);
 
             $batch = Batch::fromTypes(
-                Collection::delete(
+                ($this->collectionClass)::delete(
                     $collectionName
                 )->useGuard(StreamNotFoundGuard::withStreamName($streamName)),
-                Document::deleteOne(
+                ($this->documentClass)::deleteOne(
                     $this->eventStreamsCollection . '/' . $collectionName
                 )->useGuard(DeletedStreamNotFoundGuard::withStreamName($streamName))
             );
-            $response = $this->client->sendRequest($batch->toRequest());
+            $response = $this->client->sendType($batch);
 
             if ($response->getStatusCode() !== StatusCodeInterface::STATUS_OK) {
                 throw RuntimeException::fromResponse($response);
             }
-            BatchResult::fromResponse($response)->validateBatch($batch);
         } catch (ClientExceptionInterface $e) {
             throw RuntimeException::fromServerException($e);
         }

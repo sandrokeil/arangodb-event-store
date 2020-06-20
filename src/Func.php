@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -10,7 +11,7 @@
 
 declare(strict_types=1);
 
-namespace Prooph\EventStore\ArangoDb\Fn;
+namespace Prooph\EventStore\ArangoDb\Func;
 
 use ArangoDb\Type;
 

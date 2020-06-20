@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -85,6 +86,7 @@ abstract class EventStoreFactory implements
             $eventStore = new ArangoDbTransactionalEventStore(
                 $container->get($config['message_factory']),
                 $container->get($config['connection']),
+                $container->get($config['statement_handler']),
                 $container->get($config['persistence_strategy']),
                 $config['load_batch_size'],
                 $config['event_streams_table'],
@@ -94,6 +96,7 @@ abstract class EventStoreFactory implements
             $eventStore = new ArangoDbEventStore(
                 $container->get($config['message_factory']),
                 $container->get($config['connection']),
+                $container->get($config['statement_handler']),
                 $container->get($config['persistence_strategy']),
                 $config['load_batch_size'],
                 $config['event_streams_table']
@@ -189,6 +192,7 @@ abstract class EventStoreFactory implements
         return [
             'connection',
             'persistence_strategy',
+            'statement_handler',
         ];
     }
 

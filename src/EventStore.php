@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -12,14 +13,18 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb;
 
-use ArangoDb\Client;
 use ArangoDb\Exception\ServerException;
-use ArangoDb\Statement;
-use ArangoDb\Type\Cursor;
+use ArangoDb\Handler\StatementHandler;
+use ArangoDb\Http\TypeSupport;
+use ArangoDb\Type\Collection;
+use ArangoDb\Type\CollectionType;
+use ArangoDb\Type\Document;
+use ArangoDb\Type\DocumentType;
 use Assert\Assertion;
 use Fig\Http\Message\StatusCodeInterface;
 use Iterator;
 use Prooph\Common\Messaging\MessageFactory;
+use Prooph\EventStore\ArangoDb\Exception\WrongTypeClass;
 use Prooph\EventStore\EventStore as ProophEventStore;
 use Prooph\EventStore\Exception\StreamNotFound;
 use Prooph\EventStore\Metadata\FieldType;
@@ -27,7 +32,6 @@ use Prooph\EventStore\Metadata\MetadataMatcher;
 use Prooph\EventStore\Metadata\Operator;
 use Prooph\EventStore\Stream;
 use Prooph\EventStore\StreamName;
-use Psr\Http\Client\ClientInterface;
 
 abstract class EventStore implements ProophEventStore
 {
@@ -35,7 +39,7 @@ abstract class EventStore implements ProophEventStore
     private const SORT_DESC = 'DESC';
 
     /**
-     * @var Client
+     * @var TypeSupport
      */
     protected $client;
 
@@ -59,9 +63,25 @@ abstract class EventStore implements ProophEventStore
      */
     protected $eventStreamsCollection;
 
+    /**
+     * @var StatementHandler
+     */
+    protected $statementHandler;
+
+    /**
+     * @var string
+     */
+    protected $documentClass = Document::class;
+
+    /**
+     * @var string
+     */
+    protected $collectionClass = Collection::class;
+
     public function __construct(
         MessageFactory $messageFactory,
-        ClientInterface $client,
+        TypeSupport $client,
+        StatementHandler $statementHandler,
         PersistenceStrategy $persistenceStrategy,
         int $loadBatchSize = 10000,
         string $eventStreamsCollection = 'event_streams'
@@ -70,9 +90,26 @@ abstract class EventStore implements ProophEventStore
 
         $this->messageFactory = $messageFactory;
         $this->client = $client;
+        $this->statementHandler = $statementHandler;
         $this->persistenceStrategy = $persistenceStrategy;
         $this->loadBatchSize = $loadBatchSize;
         $this->eventStreamsCollection = $eventStreamsCollection;
+    }
+
+    public function setDocumentTypeClass(string $fqcn): void
+    {
+        if (! \is_subclass_of($fqcn, DocumentType::class)) {
+            throw WrongTypeClass::forType(DocumentType::class, $fqcn);
+        }
+        $this->documentClass = $fqcn;
+    }
+
+    public function setCollectionTypeClass(string $fqcn): void
+    {
+        if (! \is_subclass_of($fqcn, CollectionType::class)) {
+            throw WrongTypeClass::forType(CollectionType::class, $fqcn);
+        }
+        $this->collectionClass = $fqcn;
     }
 
     public function load(
@@ -112,11 +149,7 @@ abstract class EventStore implements ProophEventStore
             $filter = ' AND ' . $filter;
         }
 
-        if (null === $count) {
-            $limit = $this->loadBatchSize;
-        } else {
-            $limit = \min($count, $this->loadBatchSize);
-        }
+        $limit = $count ?? $this->loadBatchSize;
 
         $aql = <<<'EOF'
 FOR c IN  @@collection
@@ -135,25 +168,21 @@ EOF;
         $collectionName = $this->persistenceStrategy->generateCollectionName($streamName);
 
         try {
-            $cursor = new Statement(
-                $this->client,
-                Cursor::create(
-                    \str_replace(
-                        ['%DIR%', '%op%', '%filter%'],
-                        [$dir, $dir === self::SORT_ASC ? '>=' : '<=', $filter],
-                        $aql
-                    ),
-                    \array_merge(
-                        [
-                            '@collection' => $collectionName,
-                            'from' => (string) $fromNumber,
-                            'limit' => $limit,
-                        ],
-                        $values
-                    ),
-                    1000
-                )->toRequest(),
-                [Statement::ENTRY_TYPE => Statement::ENTRY_TYPE_JSON]
+            $cursor = $this->statementHandler->create(
+                \str_replace(
+                    ['%DIR%', '%op%', '%filter%'],
+                    [$dir, $dir === self::SORT_ASC ? '>=' : '<=', $filter],
+                    $aql
+                ),
+                \array_merge(
+                    [
+                        '@collection' => $collectionName,
+                        'from' => (string) $fromNumber,
+                        'limit' => $limit,
+                    ],
+                    $values
+                ),
+                $this->loadBatchSize
             );
 
             return new StreamIterator(
@@ -194,7 +223,7 @@ EOF;
         ?MetadataMatcher $metadataMatcher,
         int $limit = 20,
         int $offset = 0
-    ) {
+    ): array {
         [$where, $values] = $this->createWhereClause($metadataMatcher);
 
         if ($isRegex) {
@@ -224,21 +253,16 @@ RETURN {
 }
 EOF;
 
-        $cursor = new Statement(
-            $this->client,
-            Cursor::create(
-                \str_replace('%filter%', $filter, $aql),
-                \array_merge(
-                    [
-                        '@collection' => $this->eventStreamsCollection,
-                        'offset' => $offset,
-                        'limit' => $limit,
-                    ],
-                    $values
-                ),
-                1000
-            )->toRequest(),
-            [Statement::ENTRY_TYPE => Statement::ENTRY_TYPE_ARRAY]
+        $cursor = $this->statementHandler->create(
+            \str_replace('%filter%', $filter, $aql),
+            \array_merge(
+                [
+                    '@collection' => $this->eventStreamsCollection,
+                    'offset' => $offset,
+                    'limit' => $limit,
+                ],
+                $values
+            )
         );
 
         $streamNames = [];
@@ -301,23 +325,17 @@ RETURN {
 EOF;
         $categories = [];
 
-        $cursor = new Statement(
-            $this->client,
-            Cursor::create(
-                \str_replace('%filter%', $filter, $aql),
-                \array_merge(
-                    [
-                        '@collection' => $this->eventStreamsCollection,
-                        'offset' => $offset,
-                        'limit' => $limit,
-                    ],
-                    $values
-                ),
-                1000
-            )->toRequest(),
-            [Statement::ENTRY_TYPE => Statement::ENTRY_TYPE_ARRAY]
+        $cursor = $this->statementHandler->create(
+            \str_replace('%filter%', $filter, $aql),
+            \array_merge(
+                [
+                    '@collection' => $this->eventStreamsCollection,
+                    'offset' => $offset,
+                    'limit' => $limit,
+                ],
+                $values
+            )
         );
-
         $cursor->rewind();
 
         while ($cursor->valid()) {
@@ -337,19 +355,15 @@ FOR c IN @@collection
         metadata: c.metadata
     }
 EOF;
-        $cursor = new Statement(
-            $this->client,
-            Cursor::create(
-                $aql,
-                [
-                    '@collection' => $this->eventStreamsCollection,
-                    'real_stream_name' => $streamName->toString(),
-                ]
-            )->toRequest(),
-            [Statement::ENTRY_TYPE => Statement::ENTRY_TYPE_ARRAY]
+        $cursor = $this->statementHandler->create(
+            $aql,
+            [
+                '@collection' => $this->eventStreamsCollection,
+                'real_stream_name' => $streamName->toString(),
+            ]
         );
-
         $cursor->rewind();
+
         if (false === $cursor->valid() || ($stream = $cursor->current()) === null) {
             throw StreamNotFound::with($streamName);
         }
@@ -367,19 +381,13 @@ FOR c IN @@collection
         number: number
     }
 EOF;
-
-        $cursor = new Statement(
-            $this->client,
-            Cursor::create(
-                $aql,
-                [
-                    '@collection' => $this->eventStreamsCollection,
-                    'real_stream_name' => $streamName->toString(),
-                ]
-            )->toRequest(),
-            [Statement::ENTRY_TYPE => Statement::ENTRY_TYPE_ARRAY]
+        $cursor = $this->statementHandler->create(
+            $aql,
+            [
+                '@collection' => $this->eventStreamsCollection,
+                'real_stream_name' => $streamName->toString(),
+            ]
         );
-
         $cursor->rewind();
 
         return 1 === ($cursor->current()['number'] ?? 0);

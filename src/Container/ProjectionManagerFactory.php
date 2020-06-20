@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -70,6 +71,7 @@ final class ProjectionManagerFactory implements
         return new ProjectionManager(
             $container->get($config['event_store']),
             $container->get($config['connection']),
+            $container->get($config['statement_handler']),
             $config['event_streams_table'],
             $config['projections_table']
         );
@@ -82,7 +84,7 @@ final class ProjectionManagerFactory implements
 
     public function mandatoryOptions(): iterable
     {
-        return ['connection'];
+        return ['connection', 'statement_handler'];
     }
 
     public function defaultOptions(): iterable
