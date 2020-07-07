@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -12,10 +13,11 @@ declare(strict_types=1);
 
 namespace ProophTest\EventStore\ArangoDb\Container;
 
+use ArangoDb\Handler\StatementHandler;
 use PHPUnit\Framework\TestCase;
 use Prooph\Common\Messaging\FQCNMessageFactory;
 use Prooph\EventStore\ActionEventEmitterEventStore;
-use Prooph\EventStore\ArangoDb\Container\EventStoreFactory;
+use Prooph\EventStore\ArangoDb\Container\ArangoDbEventStoreFactory;
 use Prooph\EventStore\ArangoDb\EventStore;
 use Prooph\EventStore\ArangoDb\Exception\InvalidArgumentException;
 use Prooph\EventStore\ArangoDb\PersistenceStrategy;
@@ -39,18 +41,21 @@ final class EventStoreFactoryTest extends TestCase
             'connection' => 'my_connection',
             'persistence_strategy' => PersistenceStrategy\AggregateStreamStrategy::class,
             'wrap_action_event_emitter' => false,
+            'statement_handler' => StatementHandler::class,
         ];
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
+        $statement = TestUtil::getStatementHandler();
 
         $container = $this->prophesize(ContainerInterface::class);
 
         $container->get('config')->willReturn($config)->shouldBeCalled();
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
+        $container->get(StatementHandler::class)->willReturn($statement)->shouldBeCalled();
         $container->get(FQCNMessageFactory::class)->willReturn(new FQCNMessageFactory())->shouldBeCalled();
         $container->get(PersistenceStrategy\AggregateStreamStrategy::class)->willReturn(new PersistenceStrategy\AggregateStreamStrategy())->shouldBeCalled();
 
-        $factory = new EventStoreFactory();
+        $factory = new ArangoDbEventStoreFactory();
         $eventStore = $factory($container->reveal());
 
         $this->assertInstanceOf(EventStore::class, $eventStore);
@@ -64,19 +69,22 @@ final class EventStoreFactoryTest extends TestCase
         $config['prooph']['event_store']['custom'] = [
             'connection' => 'my_connection',
             'persistence_strategy' => PersistenceStrategy\AggregateStreamStrategy::class,
+            'statement_handler' => StatementHandler::class,
         ];
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
+        $statement = TestUtil::getStatementHandler();
 
         $container = $this->prophesize(ContainerInterface::class);
 
         $container->get('config')->willReturn($config)->shouldBeCalled();
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
+        $container->get(StatementHandler::class)->willReturn($statement)->shouldBeCalled();
         $container->get(FQCNMessageFactory::class)->willReturn(new FQCNMessageFactory())->shouldBeCalled();
         $container->get(PersistenceStrategy\AggregateStreamStrategy::class)->willReturn(new PersistenceStrategy\AggregateStreamStrategy())->shouldBeCalled();
 
         $eventStoreName = 'custom';
-        $eventStore = EventStoreFactory::$eventStoreName($container->reveal());
+        $eventStore = ArangoDbEventStoreFactory::$eventStoreName($container->reveal());
 
         $this->assertInstanceOf(ActionEventEmitterEventStore::class, $eventStore);
     }
@@ -90,14 +98,17 @@ final class EventStoreFactoryTest extends TestCase
             'connection' => 'my_connection',
             'persistence_strategy' => PersistenceStrategy\AggregateStreamStrategy::class,
             'plugins' => ['plugin'],
+            'statement_handler' => StatementHandler::class,
         ];
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
+        $statement = TestUtil::getStatementHandler();
 
         $container = $this->prophesize(ContainerInterface::class);
 
         $container->get('config')->willReturn($config)->shouldBeCalled();
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
+        $container->get(StatementHandler::class)->willReturn($statement)->shouldBeCalled();
         $container->get(FQCNMessageFactory::class)->willReturn(new FQCNMessageFactory())->shouldBeCalled();
         $container->get(PersistenceStrategy\AggregateStreamStrategy::class)->willReturn(new PersistenceStrategy\AggregateStreamStrategy())->shouldBeCalled();
 
@@ -107,7 +118,7 @@ final class EventStoreFactoryTest extends TestCase
         $container->get('plugin')->willReturn($featureMock);
 
         $eventStoreName = 'custom';
-        $eventStore = EventStoreFactory::$eventStoreName($container->reveal());
+        $eventStore = ArangoDbEventStoreFactory::$eventStoreName($container->reveal());
 
         $this->assertInstanceOf(ActionEventEmitterEventStore::class, $eventStore);
     }
@@ -124,21 +135,24 @@ final class EventStoreFactoryTest extends TestCase
             'connection' => 'my_connection',
             'persistence_strategy' => PersistenceStrategy\AggregateStreamStrategy::class,
             'plugins' => ['plugin'],
+            'statement_handler' => StatementHandler::class,
         ];
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
+        $statement = TestUtil::getStatementHandler();
 
         $container = $this->prophesize(ContainerInterface::class);
 
         $container->get('config')->willReturn($config)->shouldBeCalled();
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
+        $container->get(StatementHandler::class)->willReturn($statement)->shouldBeCalled();
         $container->get(FQCNMessageFactory::class)->willReturn(new FQCNMessageFactory())->shouldBeCalled();
         $container->get(PersistenceStrategy\AggregateStreamStrategy::class)->willReturn(new PersistenceStrategy\AggregateStreamStrategy())->shouldBeCalled();
 
         $container->get('plugin')->willReturn('notAValidPlugin');
 
         $eventStoreName = 'custom';
-        EventStoreFactory::$eventStoreName($container->reveal());
+        ArangoDbEventStoreFactory::$eventStoreName($container->reveal());
     }
 
     /**
@@ -150,17 +164,20 @@ final class EventStoreFactoryTest extends TestCase
             'connection' => 'my_connection',
             'persistence_strategy' => PersistenceStrategy\AggregateStreamStrategy::class,
             'metadata_enrichers' => ['metadata_enricher1', 'metadata_enricher2'],
+            'statement_handler' => StatementHandler::class,
         ];
 
         $metadataEnricher1 = $this->prophesize(MetadataEnricher::class);
         $metadataEnricher2 = $this->prophesize(MetadataEnricher::class);
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
+        $statement = TestUtil::getStatementHandler();
 
         $container = $this->prophesize(ContainerInterface::class);
 
         $container->get('config')->willReturn($config);
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
+        $container->get(StatementHandler::class)->willReturn($statement)->shouldBeCalled();
         $container->get(FQCNMessageFactory::class)->willReturn(new FQCNMessageFactory())->shouldBeCalled();
         $container->get(PersistenceStrategy\AggregateStreamStrategy::class)->willReturn(new PersistenceStrategy\AggregateStreamStrategy())->shouldBeCalled();
 
@@ -168,7 +185,7 @@ final class EventStoreFactoryTest extends TestCase
         $container->get('metadata_enricher2')->willReturn($metadataEnricher2->reveal());
 
         $eventStoreName = 'custom';
-        $eventStore = EventStoreFactory::$eventStoreName($container->reveal());
+        $eventStore = ArangoDbEventStoreFactory::$eventStoreName($container->reveal());
 
         $this->assertInstanceOf(ActionEventEmitterEventStore::class, $eventStore);
     }
@@ -185,21 +202,24 @@ final class EventStoreFactoryTest extends TestCase
             'connection' => 'my_connection',
             'persistence_strategy' => PersistenceStrategy\AggregateStreamStrategy::class,
             'metadata_enrichers' => ['foobar'],
+            'statement_handler' => StatementHandler::class,
         ];
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
+        $statement = TestUtil::getStatementHandler();
 
         $container = $this->prophesize(ContainerInterface::class);
 
         $container->get('config')->willReturn($config);
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
+        $container->get(StatementHandler::class)->willReturn($statement)->shouldBeCalled();
         $container->get(FQCNMessageFactory::class)->willReturn(new FQCNMessageFactory())->shouldBeCalled();
         $container->get(PersistenceStrategy\AggregateStreamStrategy::class)->willReturn(new PersistenceStrategy\AggregateStreamStrategy())->shouldBeCalled();
 
         $container->get('foobar')->willReturn('foobar');
 
         $eventStoreName = 'custom';
-        EventStoreFactory::$eventStoreName($container->reveal());
+        ArangoDbEventStoreFactory::$eventStoreName($container->reveal());
     }
 
     /**
@@ -210,6 +230,6 @@ final class EventStoreFactoryTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
 
         $eventStoreName = 'custom';
-        EventStoreFactory::$eventStoreName('invalid container');
+        ArangoDbEventStoreFactory::$eventStoreName('invalid container');
     }
 }

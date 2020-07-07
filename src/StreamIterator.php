@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -12,13 +13,13 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb;
 
-use ArangoDb\Cursor;
+use ArangoDb\Statement\Statement;
 use DateTimeImmutable;
 use DateTimeZone;
 use Prooph\Common\Messaging\Message;
 use Prooph\Common\Messaging\MessageFactory;
 
-final class StreamIterator implements \Countable, \Iterator
+final class StreamIterator implements \Prooph\EventStore\StreamIterator\StreamIterator
 {
     /**
      * @var MessageFactory
@@ -33,33 +34,40 @@ final class StreamIterator implements \Countable, \Iterator
     private $positionOffset;
 
     /**
-     * @var Cursor
+     * @var Statement
      */
     private $cursor;
 
+    /**
+     * @var mixed
+     */
+    private $currentItem;
+
+    /**
+     * @var int
+     */
+    private $currentKey = -1;
+
     public function __construct(
-        Cursor $cursor,
+        Statement $cursor,
         int $positionOffset,
         MessageFactory $messageFactory
     ) {
         $this->cursor = $cursor;
-        $this->cursor->rewind();
         $this->positionOffset = $positionOffset;
         $this->messageFactory = $messageFactory;
+
+        $this->next();
     }
 
     public function current(): ?Message
     {
-        $data = $this->cursor->current();
-
-        if ($data === null) {
+        if (false === $this->currentItem) {
             return null;
         }
-        $data = json_decode($data, true);
+        $createdAt = $this->currentItem['created_at'];
 
-        $createdAt = $data['created_at'];
-
-        if (strlen($createdAt) === 19) {
+        if (\strlen($createdAt) === 19) {
             $createdAt .= '.000';
         }
 
@@ -69,17 +77,17 @@ final class StreamIterator implements \Countable, \Iterator
             new DateTimeZone('UTC')
         );
 
-        if (! isset($data['metadata']['_position'])) {
-            $data['metadata']['_position'] = ((int) $data['no']) - $this->positionOffset + 1;
+        if (! isset($this->currentItem['metadata']['_position'])) {
+            $this->currentItem['metadata']['_position'] = ((int) $this->currentItem['no']) - $this->positionOffset + 1;
         }
 
         return $this->messageFactory->createMessageFromArray(
-            $data['event_name'],
+            $this->currentItem['event_name'],
             [
-                'uuid' => $data['event_id'],
+                'uuid' => $this->currentItem['event_id'],
                 'created_at' => $createdAt,
-                'payload' => $data['payload'],
-                'metadata' => $data['metadata'],
+                'payload' => $this->currentItem['payload'],
+                'metadata' => $this->currentItem['metadata'],
             ]
         );
     }
@@ -91,12 +99,28 @@ final class StreamIterator implements \Countable, \Iterator
 
     public function next()
     {
-        $this->cursor->next();
+        if ($this->currentKey === -1) {
+            $this->rewind();
+        } else {
+            $this->cursor->next();
+        }
+
+        if (false === $this->cursor->valid()) {
+            $this->currentItem = false;
+            $this->currentKey = -1;
+        } else {
+            $this->currentKey++;
+            $this->currentItem = $this->cursor->current();
+        }
     }
 
     public function key()
     {
-        return $this->cursor->key();
+        if ($this->currentItem !== null && isset($this->currentItem['no'])) {
+            return ((int) $this->currentItem['no']) - $this->positionOffset + 1;
+        }
+
+        return false;
     }
 
     public function valid()
@@ -106,6 +130,11 @@ final class StreamIterator implements \Countable, \Iterator
 
     public function rewind()
     {
-        $this->cursor->rewind();
+        //Only perform rewind if current item is not the first element
+        if ($this->currentKey !== -1) {
+            $this->cursor->rewind();
+            $this->currentItem = $this->cursor->current();
+            $this->currentKey = 0;
+        }
     }
 }

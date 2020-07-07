@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -19,6 +20,8 @@ use Interop\Config\RequiresMandatoryOptions;
 use Prooph\Common\Event\ProophActionEventEmitter;
 use Prooph\Common\Messaging\FQCNMessageFactory;
 use Prooph\EventStore\ActionEventEmitterEventStore;
+use Prooph\EventStore\ArangoDb\ArangoDbEventStore;
+use Prooph\EventStore\ArangoDb\ArangoDbTransactionalEventStore;
 use Prooph\EventStore\ArangoDb\EventStore;
 use Prooph\EventStore\ArangoDb\Exception\InvalidArgumentException;
 use Prooph\EventStore\EventStore as ProophEventStore;
@@ -29,7 +32,7 @@ use Prooph\EventStore\Metadata\MetadataEnricherPlugin;
 use Prooph\EventStore\Plugin\Plugin;
 use Psr\Container\ContainerInterface;
 
-class EventStoreFactory implements
+abstract class EventStoreFactory implements
     ProvidesDefaultOptions,
     RequiresConfigId,
     RequiresMandatoryOptions
@@ -60,7 +63,7 @@ class EventStoreFactory implements
     {
         if (! isset($arguments[0]) || ! $arguments[0] instanceof ContainerInterface) {
             throw new InvalidArgumentException(
-                sprintf('The first argument must be of type %s', ContainerInterface::class)
+                \sprintf('The first argument must be of type %s', ContainerInterface::class)
             );
         }
 
@@ -77,14 +80,28 @@ class EventStoreFactory implements
         $config = $container->get('config');
         $config = $this->options($config, $this->configId);
 
-        $eventStore = new EventStore(
-            $container->get($config['message_factory']),
-            $container->get($config['connection']),
-            $container->get($config['persistence_strategy']),
-            $config['load_batch_size'],
-            $config['event_streams_table'],
-            $config['disable_transaction_handling']
-        );
+        $type = $this->type();
+
+        if ($type === 'transactional') {
+            $eventStore = new ArangoDbTransactionalEventStore(
+                $container->get($config['message_factory']),
+                $container->get($config['connection']),
+                $container->get($config['statement_handler']),
+                $container->get($config['persistence_strategy']),
+                $config['load_batch_size'],
+                $config['event_streams_table'],
+                $config['disable_transaction_handling']
+            );
+        } else {
+            $eventStore = new ArangoDbEventStore(
+                $container->get($config['message_factory']),
+                $container->get($config['connection']),
+                $container->get($config['statement_handler']),
+                $container->get($config['persistence_strategy']),
+                $config['load_batch_size'],
+                $config['event_streams_table']
+            );
+        }
 
         if (! $config['wrap_action_event_emitter']) {
             return $eventStore;
@@ -96,7 +113,7 @@ class EventStoreFactory implements
             $plugin = $container->get($pluginAlias);
 
             if (! $plugin instanceof Plugin) {
-                throw ConfigurationException::configurationError(sprintf(
+                throw ConfigurationException::configurationError(\sprintf(
                     'Plugin %s does not implement the Plugin interface',
                     $pluginAlias
                 ));
@@ -111,7 +128,7 @@ class EventStoreFactory implements
             $metadataEnricher = $container->get($metadataEnricherAlias);
 
             if (! $metadataEnricher instanceof MetadataEnricher) {
-                throw ConfigurationException::configurationError(sprintf(
+                throw ConfigurationException::configurationError(\sprintf(
                     'Metadata enricher %s does not implement the MetadataEnricher interface',
                     $metadataEnricherAlias
                 ));
@@ -120,7 +137,7 @@ class EventStoreFactory implements
             $metadataEnrichers[] = $metadataEnricher;
         }
 
-        if (count($metadataEnrichers) > 0) {
+        if (\count($metadataEnrichers) > 0) {
             $plugin = new MetadataEnricherPlugin(
                 new MetadataEnricherAggregate($metadataEnrichers)
             );
@@ -175,6 +192,9 @@ class EventStoreFactory implements
         return [
             'connection',
             'persistence_strategy',
+            'statement_handler',
         ];
     }
+
+    abstract protected function type();
 }

@@ -13,21 +13,27 @@ declare(strict_types=1);
 
 namespace ProophTest\EventStore\ArangoDb;
 
+use ArangoDb\Http\TransactionalClient;
 use ArrayIterator;
+use PHPUnit\Framework\TestCase as BaseTestCase;
 use Prooph\EventStore\ArangoDb\PersistenceStrategy;
+use Prooph\EventStore\Exception\StreamNotFound;
 use Prooph\EventStore\Metadata\FieldType;
 use Prooph\EventStore\Metadata\MetadataMatcher;
 use Prooph\EventStore\Metadata\Operator;
 use Prooph\EventStore\Stream;
 use Prooph\EventStore\StreamName;
-use ProophTest\EventStore\AbstractEventStoreTest as BaseTestCase;
+use ProophTest\EventStore\EventStoreTestStreamTrait;
 use ProophTest\EventStore\Mock\UserCreated;
-use Psr\Http\Client\ClientInterface;
+use ProophTest\EventStore\TransactionalEventStoreTestTrait;
 
-abstract class AbstractEventStoreTest extends BaseTestCase
+abstract class AbstractTransactionalEventStoreTest extends BaseTestCase
 {
+    use EventStoreTestStreamTrait;
+    use TransactionalEventStoreTestTrait;
+
     /**
-     * @var ClientInterface
+     * @var TransactionalClient
      */
     protected $client;
 
@@ -61,7 +67,9 @@ abstract class AbstractEventStoreTest extends BaseTestCase
 
         $stream = new Stream(new StreamName('Prooph\Model\User'), new ArrayIterator([$event]));
 
+        $this->eventStore->beginTransaction();
         $this->eventStore->create($stream);
+        $this->eventStore->commit();
 
         $metadataMatcher = new MetadataMatcher();
         $metadataMatcher = $metadataMatcher->withMetadataMatch('foo', Operator::EQUALS(), 'bar');
@@ -110,7 +118,9 @@ abstract class AbstractEventStoreTest extends BaseTestCase
 
         $stream = new Stream($streamName, new ArrayIterator([$event]));
 
+        $this->eventStore->beginTransaction();
         $this->eventStore->create($stream);
+        $this->eventStore->commit();
 
         $metadataMatcher = new MetadataMatcher();
         $metadataMatcher = $metadataMatcher->withMetadataMatch('foo', Operator::EQUALS(), 'bar');
@@ -162,7 +172,9 @@ abstract class AbstractEventStoreTest extends BaseTestCase
 
         $stream = new Stream($streamName, new ArrayIterator([$event]));
 
+        $this->eventStore->beginTransaction();
         $this->eventStore->create($stream);
+        $this->eventStore->commit();
 
         $metadataMatcher = new MetadataMatcher();
         $metadataMatcher = $metadataMatcher->withMetadataMatch('event_id', Operator::EQUALS(), 'baz', FieldType::MESSAGE_PROPERTY());
@@ -250,7 +262,9 @@ abstract class AbstractEventStoreTest extends BaseTestCase
         $streamName = new StreamName('Prooph\Model\User');
         $stream = new Stream($streamName, new ArrayIterator([$event]));
 
+        $this->eventStore->beginTransaction();
         $this->eventStore->create($stream);
+        $this->eventStore->commit();
 
         $metadataMatcher = new MetadataMatcher();
         $metadataMatcher = $metadataMatcher->withMetadataMatch('event_id', Operator::EQUALS(), 'baz', FieldType::MESSAGE_PROPERTY());
@@ -314,6 +328,54 @@ abstract class AbstractEventStoreTest extends BaseTestCase
         $result = $this->eventStore->loadReverse($streamName, 1, null, $metadataMatcher);
 
         $this->assertFalse($result->valid());
+    }
+
+    /**
+     * @test
+     */
+    public function it_updates_stream_metadata(): void
+    {
+        $stream = $this->getTestStream();
+
+        $this->eventStore->beginTransaction();
+        $this->eventStore->create($stream);
+
+        $this->eventStore->updateStreamMetadata($stream->streamName(), ['new' => 'values']);
+
+        $this->eventStore->commit();
+
+        $this->assertEquals(
+            [
+                'new' => 'values',
+            ],
+            $this->eventStore->fetchStreamMetadata($stream->streamName())
+        );
+    }
+
+    /**
+     * @test
+     */
+    public function it_throws_stream_not_found_exception_when_trying_to_update_metadata_on_unknown_stream(): void
+    {
+        $this->expectException(StreamNotFound::class);
+
+        $this->eventStore->beginTransaction();
+        $this->eventStore->updateStreamMetadata(new StreamName('unknown'), []);
+        $this->eventStore->commit();
+    }
+
+    /**
+     * @test
+     */
+    public function it_adds_events_to_transaction_client_if_not_in_transaction(): void
+    {
+        $stream = $this->getTestStream();
+        $this->eventStore->create($stream);
+
+        $this->eventStore->updateStreamMetadata($stream->streamName(), ['new' => 'values']);
+
+        $this->assertTrue($this->client->countTypes() >= 3);
+        $this->assertSame(3, $this->client->countTransactionalTypes());
     }
 
     protected function tearDown(): void

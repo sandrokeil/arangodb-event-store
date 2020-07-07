@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -11,7 +12,7 @@
 declare(strict_types=1);
 
 use Prooph\Common\Messaging\FQCNMessageFactory;
-use Prooph\EventStore\ArangoDb\EventStore;
+use Prooph\EventStore\ArangoDb\ArangoDbEventStore;
 use Prooph\EventStore\ArangoDb\PersistenceStrategy\SimpleStreamStrategy;
 use Prooph\EventStore\ArangoDb\Projection\ProjectionManager;
 use Prooph\EventStore\ArangoDb\Projection\Projector;
@@ -49,16 +50,19 @@ $readModel = new class() implements ReadModel {
 };
 
 $connection = TestUtil::getClient();
+$statementHandler = TestUtil::getStatementHandler();
 
-$eventStore = new EventStore(
+$eventStore = new ArangoDbEventStore(
     new FQCNMessageFactory(),
     $connection,
+    $statementHandler,
     new SimpleStreamStrategy()
 );
 
 $projectionManager = new ProjectionManager(
     $eventStore,
-    $connection
+    $connection,
+    $statementHandler
 );
 $projection = $projectionManager->createReadModelProjection(
     'test_projection',
@@ -67,7 +71,7 @@ $projection = $projectionManager->createReadModelProjection(
         Projector::OPTION_PCNTL_DISPATCH => true,
     ]
 );
-pcntl_signal(SIGQUIT, function () use ($projection) {
+\pcntl_signal(SIGQUIT, function () use ($projection) {
     $projection->stop();
     exit(SIGUSR1);
 });

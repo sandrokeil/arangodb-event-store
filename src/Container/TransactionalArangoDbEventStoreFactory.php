@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -10,17 +11,12 @@
 
 declare(strict_types=1);
 
-namespace Prooph\EventStore\ArangoDb\Type;
+namespace Prooph\EventStore\ArangoDb\Container;
 
-interface HasResponse
+final class TransactionalArangoDbEventStoreFactory extends EventStoreFactory
 {
-    /**
-     * @return string
-     */
-    public function rawResult(): ?string;
-
-    /**
-     * @return mixed
-     */
-    public function result();
+    protected function type()
+    {
+        return 'transactional';
+    }
 }

@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -12,10 +13,11 @@ declare(strict_types=1);
 
 namespace ProophTest\EventStore\ArangoDb\Container;
 
+use ArangoDb\Handler\StatementHandler;
 use PHPUnit\Framework\TestCase;
 use Prooph\Common\Messaging\MessageFactory;
+use Prooph\EventStore\ArangoDb\ArangoDbEventStore;
 use Prooph\EventStore\ArangoDb\Container\ProjectionManagerFactory;
-use Prooph\EventStore\ArangoDb\EventStore;
 use Prooph\EventStore\ArangoDb\Exception\InvalidArgumentException;
 use Prooph\EventStore\ArangoDb\PersistenceStrategy;
 use Prooph\EventStore\ArangoDb\Projection\ProjectionManager;
@@ -35,18 +37,21 @@ class ProjectionManagerFactoryTest extends TestCase
     {
         $config['prooph']['projection_manager']['default'] = [
             'connection' => 'my_connection',
+            'statement_handler' => StatementHandler::class,
         ];
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
 
         $container = $this->prophesize(ContainerInterface::class);
-        $eventStore = new EventStore(
+        $eventStore = new ArangoDbEventStore(
             $this->createMock(MessageFactory::class),
             TestUtil::getClient(),
+            TestUtil::getStatementHandler(),
             $this->createMock(PersistenceStrategy::class)
         );
 
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
+        $container->get(StatementHandler::class)->willReturn(TestUtil::getStatementHandler())->shouldBeCalled();
         $container->get(ProophEventStore::class)->willReturn($eventStore)->shouldBeCalled();
         $container->get('config')->willReturn($config)->shouldBeCalled();
 
@@ -63,18 +68,21 @@ class ProjectionManagerFactoryTest extends TestCase
     {
         $config['prooph']['projection_manager']['default'] = [
             'connection' => 'my_connection',
+            'statement_handler' => StatementHandler::class,
         ];
 
-        $connection = TestUtil::getClient();
+        $client = TestUtil::getClient();
 
         $container = $this->prophesize(ContainerInterface::class);
-        $eventStore = new EventStore(
+        $eventStore = new ArangoDbEventStore(
             $this->createMock(MessageFactory::class),
             TestUtil::getClient(),
+            TestUtil::getStatementHandler(),
             $this->createMock(PersistenceStrategy::class)
         );
 
-        $container->get('my_connection')->willReturn($connection)->shouldBeCalled();
+        $container->get('my_connection')->willReturn($client)->shouldBeCalled();
+        $container->get(StatementHandler::class)->willReturn(TestUtil::getStatementHandler())->shouldBeCalled();
         $container->get(ProophEventStore::class)->willReturn($eventStore)->shouldBeCalled();
         $container->get('config')->willReturn($config)->shouldBeCalled();
 

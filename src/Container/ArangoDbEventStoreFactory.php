@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -10,16 +11,12 @@
 
 declare(strict_types=1);
 
-namespace Prooph\EventStore\ArangoDb\Type;
+namespace Prooph\EventStore\ArangoDb\Container;
 
-use ArangoDb\Request;
-
-trait ToHttpTrait
+final class ArangoDbEventStoreFactory extends EventStoreFactory
 {
-    private $httpProtocol = 'HTTP/1.1';
-
-    protected function buildAppendBatch(string $method, string $url, array $data, array $queryParams = []): array
+    protected function type()
     {
-        return [\strtolower($method), $url, $data, $queryParams];
+        return 'default';
     }
 }

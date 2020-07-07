@@ -14,15 +14,15 @@ declare(strict_types=1);
 namespace ProophTest\EventStore\ArangoDb;
 
 use Prooph\Common\Messaging\FQCNMessageFactory;
-use Prooph\EventStore\ArangoDb\ArangoDbEventStore;
+use Prooph\EventStore\ArangoDb\ArangoDbTransactionalEventStore;
 use Prooph\EventStore\ArangoDb\PersistenceStrategy;
 use Prooph\EventStore\ArangoDb\PersistenceStrategy\SingleStreamStrategy;
 
 /**
- * @group EventStore
+ * @group TransactionalEventStore
  * @group SingleStream
  */
-class EventStoreSingleStreamTest extends AbstractEventStoreTest
+class TransactionalEventStoreSingleStreamTest extends AbstractTransactionalEventStoreTest
 {
     protected function getPersistenceStrategy(): PersistenceStrategy
     {
@@ -32,10 +32,10 @@ class EventStoreSingleStreamTest extends AbstractEventStoreTest
     protected function setUp(): void
     {
         TestUtil::createDatabase();
-        $this->client = TestUtil::getClient();
+        $this->client = TestUtil::getTransactionalClient();
         TestUtil::setupCollections($this->client);
 
-        $this->eventStore = new ArangoDbEventStore(
+        $this->eventStore = new ArangoDbTransactionalEventStore(
             new FQCNMessageFactory(),
             $this->client,
             TestUtil::getStatementHandler(),

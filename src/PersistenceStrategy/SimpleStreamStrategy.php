@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -12,12 +13,11 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\PersistenceStrategy;
 
+use ArangoDb\Guard\Guard;
+use ArangoDb\Type\Collection;
+use ArangoDb\Type\Index;
 use Iterator;
-use Prooph\EventStore\ArangoDb\JsonIterator;
-use Prooph\EventStore\ArangoDb\Iterator\JsonSimpleStreamIterator;
 use Prooph\EventStore\ArangoDb\PersistenceStrategy;
-use Prooph\EventStore\ArangoDb\Type\CreateCollection;
-use Prooph\EventStore\ArangoDb\Type\CreateIndex;
 use Prooph\EventStore\StreamName;
 
 final class SimpleStreamStrategy implements PersistenceStrategy
@@ -29,12 +29,7 @@ final class SimpleStreamStrategy implements PersistenceStrategy
 
     public function __construct()
     {
-        $this->offsetNumber = (int) str_pad('1', strlen((string) PHP_INT_MAX) - 1, '0');
-    }
-
-    public function jsonIterator(Iterator $streamEvents): JsonIterator
-    {
-        return new JsonSimpleStreamIterator($streamEvents);
+        $this->offsetNumber = (int) \str_pad('1', \strlen((string) PHP_INT_MAX) - 1, '0');
     }
 
     public function padPosition(int $position): int
@@ -51,9 +46,9 @@ final class SimpleStreamStrategy implements PersistenceStrategy
         return $this->offsetNumber;
     }
 
-    public function createCollection(string $collectionName): array
+    public function createCollection(string $collectionName, Guard $collectionGuard): array
     {
-        $collection = CreateCollection::with(
+        $collection = Collection::create(
             $collectionName,
             [
                 'keyOptions' => [
@@ -64,28 +59,27 @@ final class SimpleStreamStrategy implements PersistenceStrategy
                 ],
             ]
         );
+        $collection->useGuard($collectionGuard);
 
-        $eventIdIndex = CreateIndex::with(
+        $eventIdIndex = Index::create(
             $collectionName,
             [
                 'type' => 'hash',
                 'fields' => [
                     'event_id',
                 ],
-                'selectivityEstimate' => 1,
                 'unique' => true,
                 'sparse' => false,
             ]
         );
 
-        $sortingIndex = CreateIndex::with(
+        $sortingIndex = Index::create(
             $collectionName,
             [
                 'type' => 'skiplist',
                 'fields' => [
                     '_key',
                 ],
-                'selectivityEstimate' => 1,
                 'unique' => true,
                 'sparse' => false,
             ]
@@ -117,6 +111,6 @@ final class SimpleStreamStrategy implements PersistenceStrategy
 
     public function generateCollectionName(StreamName $streamName): string
     {
-        return 'c' . sha1($streamName->toString());
+        return 'c' . \sha1($streamName->toString());
     }
 }

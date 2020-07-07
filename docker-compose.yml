@@ -2,33 +2,21 @@ version: '2'
 services:
   # To run tests docker-compose run --rm php vendor/bin/phpunit
   php:
-    build:
-      context: ./env
-      dockerfile: Dockerfile
+    image: prooph/php:7.4-cli-xdebug
     environment:
       PHP_IDE_CONFIG: "serverName=application"
-      arangodb_host: "vst://arangodb:8529"
+      XDEBUG_CONFIG: "remote_host=172.17.0.1"
+      arangodb_host: "tcp://arangodb:8529"
       arangodb_username: ""
       arangodb_password: ""
-      arangodb_dbname: _system
+      arangodb_dbname: testing
     volumes:
-      - "./:/app"
-
-  # To run tests docker-compose run --rm php-polyfill vendor/bin/phpunit
-  php-polyfill:
-    image: prooph/php:7.1-cli-xdebug
-    environment:
-      PHP_IDE_CONFIG: "serverName=application"
-      arangodb_host: "vst://arangodb:8529"
-      arangodb_username: ""
-      arangodb_password: ""
-      arangodb_dbname: _system
-    volumes:
-      - "./:/app"
+    - "./:/app"
 
   arangodb:
-    image: arangodb:3.2.9
+    image: arangodb:3.6.4
     ports:
-      - 8529:8529
+    - 8529:8529
     environment:
-      - ARANGO_NO_AUTH=1
+    - ARANGO_NO_AUTH=1
+    #command: "--log.level startup=trace --log.level queries=trace --log.level info"

@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -12,9 +13,15 @@ declare(strict_types=1);
 
 namespace ProophTest\EventStore\ArangoDb\Projection;
 
-use ArangoDb\Connection;
+use ArangoDb\Handler\StatementHandler;
+use ArangoDb\Http\TransactionSupport;
+use ArangoDb\Http\TypeSupport;
+use ArrayIterator;
+use DateTimeImmutable;
 use Prooph\Common\Messaging\FQCNMessageFactory;
 use Prooph\Common\Messaging\Message;
+use Prooph\EventStore\ArangoDb\ArangoDbEventStore;
+use Prooph\EventStore\ArangoDb\ArangoDbTransactionalEventStore;
 use Prooph\EventStore\ArangoDb\EventStore;
 use Prooph\EventStore\ArangoDb\PersistenceStrategy;
 use Prooph\EventStore\ArangoDb\Projection\ProjectionManager;
@@ -23,6 +30,8 @@ use Prooph\EventStore\EventStore as ProophEventStore;
 use Prooph\EventStore\EventStoreDecorator;
 use Prooph\EventStore\Exception\InvalidArgumentException;
 use Prooph\EventStore\Projection\Projector as ProophProjector;
+use Prooph\EventStore\Stream;
+use Prooph\EventStore\StreamName;
 use ProophTest\EventStore\ArangoDb\TestUtil;
 use ProophTest\EventStore\Mock\UserCreated;
 use ProophTest\EventStore\Mock\UsernameChanged;
@@ -41,40 +50,44 @@ abstract class AbstractProjectorTest extends AbstractEventStoreProjectorTest
     protected $eventStore;
 
     /**
-     * @var Connection
+     * @var TypeSupport
      */
-    private $connection;
+    private $client;
 
     abstract protected function getPersistenceStrategy(): PersistenceStrategy;
 
     protected function setUp(): void
     {
-        $this->connection = TestUtil::getClient();
-        TestUtil::setupCollections($this->connection);
+        TestUtil::createDatabase();
+        $this->client = TestUtil::getClient();
+        TestUtil::setupCollections($this->client);
 
-        $this->eventStore = new EventStore(
+        $this->eventStore = new ArangoDbEventStore(
             new FQCNMessageFactory(),
-            $this->connection,
+            $this->client,
+            TestUtil::getStatementHandler(),
             $this->getPersistenceStrategy()
         );
-        $this->projectionManager = new ProjectionManager($this->eventStore, $this->connection);
+        $this->projectionManager = new ProjectionManager($this->eventStore, $this->client, TestUtil::getStatementHandler());
+    }
+
+    protected function setUpEventStoreWithControlledConnection(TransactionSupport $connection): \Prooph\EventStore\TransactionalEventStore
+    {
+        return new ArangoDbTransactionalEventStore(
+            new FQCNMessageFactory(),
+            $connection,
+            TestUtil::getStatementHandler(),
+            $this->getPersistenceStrategy(),
+            10000,
+            'event_streams',
+            true
+        );
     }
 
     protected function tearDown(): void
     {
-        TestUtil::deleteCollection($this->connection, 'event_streams');
-
-        TestUtil::deleteCollection($this->connection, 'projections');
-        TestUtil::deleteCollection($this->connection, 'c' . sha1('user-123'));
-        // these tables are used only in some test cases
-        TestUtil::deleteCollection($this->connection, 'c' . sha1('user-234'));
-        TestUtil::deleteCollection($this->connection, 'c' . sha1('$iternal-345'));
-        TestUtil::deleteCollection($this->connection, 'c' . sha1('guest-345'));
-        TestUtil::deleteCollection($this->connection, 'c' . sha1('guest-456'));
-        TestUtil::deleteCollection($this->connection, 'c' . sha1('foo'));
-        TestUtil::deleteCollection($this->connection, 'c' . sha1('test_projection'));
-
-        unset($this->connection);
+        TestUtil::dropDatabase();
+        unset($this->client);
     }
 
     /**
@@ -152,11 +165,13 @@ abstract class AbstractProjectorTest extends AbstractEventStoreProjectorTest
 
         $eventStore = $this->prophesize(ProophEventStore::class);
         $wrappedEventStore = $this->prophesize(EventStoreDecorator::class);
+        $StatementHandler = $this->prophesize(StatementHandler::class);
         $wrappedEventStore->getInnerEventStore()->willReturn($eventStore->reveal())->shouldBeCalled();
 
         new Projector(
             $wrappedEventStore->reveal(),
-            $this->connection,
+            $this->client,
+            $StatementHandler->reveal(),
             'test_projection',
             'event_streams',
             'projections',
@@ -175,11 +190,13 @@ abstract class AbstractProjectorTest extends AbstractEventStoreProjectorTest
         $this->expectException(InvalidArgumentException::class);
 
         $eventStore = $this->prophesize(ProophEventStore::class);
-        $connection = $this->prophesize(Connection::class);
+        $connection = $this->prophesize(TypeSupport::class);
+        $StatementHandler = $this->prophesize(StatementHandler::class);
 
         new Projector(
             $eventStore->reveal(),
             $connection->reveal(),
+            $StatementHandler->reveal(),
             'test_projection',
             'event_streams',
             'projections',
@@ -195,13 +212,13 @@ abstract class AbstractProjectorTest extends AbstractEventStoreProjectorTest
      */
     public function it_dispatches_pcntl_signals_when_enabled(): void
     {
-        if (! extension_loaded('pcntl')) {
+        if (! \extension_loaded('pcntl')) {
             $this->markTestSkipped('The PCNTL extension is not available.');
 
             return;
         }
 
-        $command = 'exec php ' . realpath(__DIR__) . '/isolated-projection.php';
+        $command = 'exec php ' . \realpath(__DIR__) . '/isolated-projection.php';
         $descriptorSpec = [
             0 => ['pipe', 'r'],
             1 => ['pipe', 'w'],
@@ -211,16 +228,57 @@ abstract class AbstractProjectorTest extends AbstractEventStoreProjectorTest
          * Created process inherits env variables from this process.
          * Script returns with non-standard code SIGUSR1 from the handler and -1 else
          */
-        $projectionProcess = proc_open($command, $descriptorSpec, $pipes);
-        $processDetails = proc_get_status($projectionProcess);
-        sleep(1);
-        posix_kill($processDetails['pid'], SIGQUIT);
-        sleep(1);
+        $projectionProcess = \proc_open($command, $descriptorSpec, $pipes);
+        $processDetails = \proc_get_status($projectionProcess);
+        \sleep(1);
+        \posix_kill($processDetails['pid'], SIGQUIT);
+        \sleep(1);
 
-        $processDetails = proc_get_status($projectionProcess);
+        $processDetails = \proc_get_status($projectionProcess);
         $this->assertEquals(
             SIGUSR1,
             $processDetails['exitcode']
         );
+    }
+
+    /**
+     * @test
+     */
+    public function it_detects_gap_and_performs_retry(): void
+    {
+        $this->markTestSkipped('Find out how to test it!');
+    }
+
+    /**
+     * @test
+     */
+    public function it_continues_when_retry_limit_is_reached_and_gap_not_filled(): void
+    {
+        $this->markTestSkipped('Find out how to test it!');
+    }
+
+    /**
+     * @test
+     */
+    public function it_does_not_perform_retry_when_event_is_older_than_detection_window(): void
+    {
+        $this->markTestSkipped('Find out how to test it!');
+    }
+
+    protected function prepareEventStreamWithOneEvent(string $name, DateTimeImmutable $createdAt = null): void
+    {
+        $events = [];
+
+        if ($createdAt) {
+            $events[] = UserCreated::withPayloadAndSpecifiedCreatedAt([
+                'name' => 'Alex',
+            ], 1, $createdAt);
+        } else {
+            $events[] = UserCreated::with([
+                'name' => 'Alex',
+            ], 1);
+        }
+
+        $this->eventStore->create(new Stream(new StreamName($name), new ArrayIterator($events)));
     }
 }

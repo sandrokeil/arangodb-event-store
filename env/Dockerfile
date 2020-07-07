@@ -1,4 +1,4 @@
-FROM php:7.1-alpine
+FROM php:7.2-alpine
 
 RUN buildDeps=' \
     bash \
@@ -10,41 +10,37 @@ RUN buildDeps=' \
     libssl1.0 \
     boost-dev \
     curl-dev \
-    openssl \
-    openssl-dev \
     libc-dev \
     pcre-dev \
     autoconf \
-    file \
-    pkgconf \
-    re2c \
     ' \
-    && apk add --update $buildDeps \
-    && pecl install xdebug \
+    && apk add --no-cache --update $buildDeps \
+    && docker-php-source extract
+
+RUN set -xe \
     && docker-php-ext-configure pcntl --enable-pcntl \
-    && docker-php-ext-install \
-       pcntl
+    && docker-php-ext-install -j$(nproc) \
+        pcntl \
+    && pecl install xdebug
 
-ENV PHP_CPP_VERSION master
+ENV VELOCYPACK_PHP master
 
-    # PHP-CPP
-RUN git clone --branch ${PHP_CPP_VERSION} https://github.com/CopernicaMarketingSoftware/PHP-CPP /tmp/php-cpp \
-        && cd /tmp/php-cpp \
-        && sed -i 's/`\${PHP_CONFIG} \-\-ldflags`//g' Makefile \
-        && make \
-        && make install
+RUN git clone --branch ${VELOCYPACK_PHP} https://github.com/martin-schilling/php-velocypack /tmp/php-velocypack \
+    && cd /tmp/php-velocypack \
+    && sh clone_velocypack \
+    && cd deps/velocypack \
+    && mkdir -p build \
+    && cd build \
+    && cmake .. -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-fPIC -std=c++11" \
+    && make install
 
-ENV ARANGODB_PHP_DRIVER master
-
-RUN git clone --branch ${ARANGODB_PHP_DRIVER} https://github.com/sandrokeil/arangodb-php-driver /tmp/arangodb-php-driver \
-    && cd /tmp/arangodb-php-driver \
-    && sh get_fuerte \
-    && cd /tmp/arangodb-php-driver/build && cmake .. -DPHPCPP_ARCH=x86_64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-fPIC \
-    && make install \
+RUN cd /tmp/php-velocypack \
+    && phpize && ./configure \
+    && make all -j4 \
+    && mv modules/velocypack.so $(php-config --extension-dir) \
     && rm -rf /tmp \
-    && echo "extension=libarangodb.so" > /usr/local/etc/php/conf.d/arangodb.ini
+    && echo "extension=velocypack.so" > /usr/local/etc/php/conf.d/velocypack.ini
 
-RUN apk del --purge $buildDeps
 
 # Copy custom configuration
 COPY xdebug-cli.ini /usr/local/etc/php/conf.d/

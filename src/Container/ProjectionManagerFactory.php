@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -22,7 +23,7 @@ use Prooph\EventStore\EventStore;
 use Prooph\EventStore\Projection\ProjectionManager as ProophProjectionManager;
 use Psr\Container\ContainerInterface;
 
-class ProjectionManagerFactory implements
+final class ProjectionManagerFactory implements
     ProvidesDefaultOptions,
     RequiresConfigId,
     RequiresMandatoryOptions
@@ -50,7 +51,7 @@ class ProjectionManagerFactory implements
     {
         if (! isset($arguments[0]) || ! $arguments[0] instanceof ContainerInterface) {
             throw new InvalidArgumentException(
-                sprintf('The first argument must be of type %s', ContainerInterface::class)
+                \sprintf('The first argument must be of type %s', ContainerInterface::class)
             );
         }
 
@@ -70,6 +71,7 @@ class ProjectionManagerFactory implements
         return new ProjectionManager(
             $container->get($config['event_store']),
             $container->get($config['connection']),
+            $container->get($config['statement_handler']),
             $config['event_streams_table'],
             $config['projections_table']
         );
@@ -82,7 +84,7 @@ class ProjectionManagerFactory implements
 
     public function mandatoryOptions(): iterable
     {
-        return ['connection'];
+        return ['connection', 'statement_handler'];
     }
 
     public function defaultOptions(): iterable

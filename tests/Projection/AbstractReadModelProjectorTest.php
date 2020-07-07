@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -12,10 +13,12 @@ declare(strict_types=1);
 
 namespace ProophTest\EventStore\ArangoDb\Projection;
 
-use ArangoDb\Connection;
+use ArangoDb\Handler\StatementHandler;
+use ArangoDb\Http\TypeSupport;
 use ArrayIterator;
 use Prooph\Common\Messaging\FQCNMessageFactory;
 use Prooph\Common\Messaging\Message;
+use Prooph\EventStore\ArangoDb\ArangoDbEventStore;
 use Prooph\EventStore\ArangoDb\EventStore;
 use Prooph\EventStore\ArangoDb\PersistenceStrategy;
 use Prooph\EventStore\ArangoDb\Projection\ProjectionManager;
@@ -44,40 +47,31 @@ abstract class AbstractReadModelProjectorTest extends AbstractEventStoreReadMode
     protected $eventStore;
 
     /**
-     * @var Connection
+     * @var TypeSupport
      */
-    private $connection;
+    private $client;
 
     abstract protected function getPersistenceStrategy(): PersistenceStrategy;
 
     protected function setUp(): void
     {
-        $this->connection = TestUtil::getClient();
-        TestUtil::setupCollections($this->connection);
+        TestUtil::createDatabase();
+        $this->client = TestUtil::getClient();
+        TestUtil::setupCollections($this->client);
 
-        $this->eventStore = new EventStore(
+        $this->eventStore = new ArangoDbEventStore(
             new FQCNMessageFactory(),
-            $this->connection,
+            $this->client,
+            TestUtil::getStatementHandler(),
             $this->getPersistenceStrategy()
         );
-        $this->projectionManager = new ProjectionManager($this->eventStore, $this->connection);
+        $this->projectionManager = new ProjectionManager($this->eventStore, $this->client, TestUtil::getStatementHandler());
     }
 
     protected function tearDown(): void
     {
-        TestUtil::deleteCollection($this->connection, 'event_streams');
-
-        TestUtil::deleteCollection($this->connection, 'projections');
-        TestUtil::deleteCollection($this->connection, 'c' . sha1('user-123'));
-        // these tables are used only in some test cases
-        TestUtil::deleteCollection($this->connection, 'c' . sha1('user-234'));
-        TestUtil::deleteCollection($this->connection, 'c' . sha1('$iternal-345'));
-        TestUtil::deleteCollection($this->connection, 'c' . sha1('guest-345'));
-        TestUtil::deleteCollection($this->connection, 'c' . sha1('guest-456'));
-        TestUtil::deleteCollection($this->connection, 'c' . sha1('foo'));
-        TestUtil::deleteCollection($this->connection, 'c' . sha1('test_projection'));
-
-        unset($this->connection);
+        TestUtil::dropDatabase();
+        unset($this->client);
     }
 
     /**
@@ -112,7 +106,7 @@ abstract class AbstractReadModelProjectorTest extends AbstractEventStoreReadMode
         $events = [];
         for ($i = 51; $i < 100; $i++) {
             $events[] = UsernameChanged::with([
-                'name' => uniqid('name_'),
+                'name' => \uniqid('name_'),
             ], $i);
         }
         $events[] = UsernameChanged::with([
@@ -156,10 +150,12 @@ abstract class AbstractReadModelProjectorTest extends AbstractEventStoreReadMode
         $eventStore = $this->prophesize(ProophEventStore::class);
         $wrappedEventStore = $this->prophesize(EventStoreDecorator::class);
         $wrappedEventStore->getInnerEventStore()->willReturn($eventStore->reveal())->shouldBeCalled();
+        $statementHandler = $this->prophesize(StatementHandler::class);
 
         new ReadModelProjector(
             $wrappedEventStore->reveal(),
-            $this->connection,
+            $this->client,
+            $statementHandler->reveal(),
             'test_projection',
             new ReadModelMock(),
             'event_streams',
@@ -178,12 +174,14 @@ abstract class AbstractReadModelProjectorTest extends AbstractEventStoreReadMode
         $this->expectException(InvalidArgumentException::class);
 
         $eventStore = $this->prophesize(ProophEventStore::class);
-        $connection = $this->prophesize(Connection::class);
+        $connection = $this->prophesize(TypeSupport::class);
         $readModel = $this->prophesize(ReadModel::class);
+        $statementHandler = $this->prophesize(StatementHandler::class);
 
         new ReadModelProjector(
             $eventStore->reveal(),
             $connection->reveal(),
+            $statementHandler->reveal(),
             'test_projection',
             $readModel->reveal(),
             'event_streams',
@@ -199,13 +197,13 @@ abstract class AbstractReadModelProjectorTest extends AbstractEventStoreReadMode
      */
     public function it_dispatches_pcntl_signals_when_enabled(): void
     {
-        if (! extension_loaded('pcntl')) {
+        if (! \extension_loaded('pcntl')) {
             $this->markTestSkipped('The PCNTL extension is not available.');
 
             return;
         }
 
-        $command = 'exec php ' . realpath(__DIR__) . '/isolated-read-model-projection.php';
+        $command = 'exec php ' . \realpath(__DIR__) . '/isolated-read-model-projection.php';
         $descriptorSpec = [
             0 => ['pipe', 'r'],
             1 => ['pipe', 'w'],
@@ -215,16 +213,40 @@ abstract class AbstractReadModelProjectorTest extends AbstractEventStoreReadMode
          * Created process inherits env variables from this process.
          * Script returns with non-standard code SIGUSR1 from the handler and -1 else
          */
-        $projectionProcess = proc_open($command, $descriptorSpec, $pipes);
-        $processDetails = proc_get_status($projectionProcess);
-        sleep(1);
-        posix_kill($processDetails['pid'], SIGQUIT);
-        sleep(1);
+        $projectionProcess = \proc_open($command, $descriptorSpec, $pipes);
+        $processDetails = \proc_get_status($projectionProcess);
+        \sleep(1);
+        \posix_kill($processDetails['pid'], SIGQUIT);
+        \sleep(1);
 
-        $processDetails = proc_get_status($projectionProcess);
+        $processDetails = \proc_get_status($projectionProcess);
         $this->assertEquals(
             SIGUSR1,
             $processDetails['exitcode']
         );
+    }
+
+    /**
+     * @test
+     */
+    public function it_detects_gap_and_performs_retry(): void
+    {
+        $this->markTestSkipped('Find out how to test it!');
+    }
+
+    /**
+     * @test
+     */
+    public function it_continues_when_retry_limit_is_reached_and_gap_not_filled(): void
+    {
+        $this->markTestSkipped('Find out how to test it!');
+    }
+
+    /**
+     * @test
+     */
+    public function it_does_not_perform_retry_when_event_is_older_than_detection_window(): void
+    {
+        $this->markTestSkipped('Find out how to test it!');
     }
 }

@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -12,18 +13,18 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Projection;
 
-use ArangoDb\Connection;
-use ArangoDb\Cursor;
-use ArangoDb\Vpack;
-use ArangoDBClient\Statement;
+use ArangoDb\Exception\ServerException;
+use ArangoDb\Handler\StatementHandler;
 use Closure;
-use Iterator;
 use Prooph\Common\Messaging\Message;
 use Prooph\EventStore\ArangoDb\EventStore as ArangoDbEventStore;
+use Prooph\EventStore\ArangoDb\Exception\RuntimeException;
 use Prooph\EventStore\EventStore;
 use Prooph\EventStore\EventStoreDecorator;
 use Prooph\EventStore\Exception;
+use Prooph\EventStore\Metadata\MetadataMatcher;
 use Prooph\EventStore\Projection\Query as ProophQuery;
+use Prooph\EventStore\StreamIterator\MergedStreamIterator;
 use Prooph\EventStore\StreamName;
 
 final class Query implements ProophQuery
@@ -32,11 +33,6 @@ final class Query implements ProophQuery
      * @var EventStore
      */
     private $eventStore;
-
-    /**
-     * @var Connection
-     */
-    private $connection;
 
     /**
      * @var string
@@ -83,11 +79,31 @@ final class Query implements ProophQuery
      */
     private $query;
 
-    public function __construct(EventStore $eventStore, Connection $connection, string $eventStreamsTable)
-    {
+    /**
+     * @var MetadataMatcher|null
+     */
+    private $metadataMatcher;
+
+    /**
+     * @var StatementHandler
+     */
+    protected $statementHandler;
+
+    /**
+     * @var bool
+     */
+    private $triggerPcntlSignalDispatch;
+
+    public function __construct(
+        EventStore $eventStore,
+        StatementHandler $statementHandler,
+        string $eventStreamsTable,
+        bool $triggerPcntlSignalDispatch = false
+    ) {
         $this->eventStore = $eventStore;
-        $this->connection = $connection;
+        $this->statementHandler = $statementHandler;
         $this->eventStreamsTable = $eventStreamsTable;
+        $this->triggerPcntlSignalDispatch = $triggerPcntlSignalDispatch;
 
         while ($eventStore instanceof EventStoreDecorator) {
             $eventStore = $eventStore->getInnerEventStore();
@@ -109,7 +125,7 @@ final class Query implements ProophQuery
 
         $result = $callback();
 
-        if (is_array($result)) {
+        if (\is_array($result)) {
             $this->state = $result;
         }
 
@@ -118,13 +134,14 @@ final class Query implements ProophQuery
         return $this;
     }
 
-    public function fromStream(string $streamName): ProophQuery
+    public function fromStream(string $streamName, MetadataMatcher $metadataMatcher = null): ProophQuery
     {
         if (null !== $this->query) {
             throw new Exception\RuntimeException('From was already called');
         }
 
         $this->query['streams'][] = $streamName;
+        $this->metadataMatcher = $metadataMatcher;
 
         return $this;
     }
@@ -184,7 +201,7 @@ final class Query implements ProophQuery
         }
 
         foreach ($handlers as $eventName => $handler) {
-            if (! is_string($eventName)) {
+            if (! \is_string($eventName)) {
                 throw new Exception\InvalidArgumentException('Invalid event name given, string expected');
             }
 
@@ -215,10 +232,10 @@ final class Query implements ProophQuery
 
         $callback = $this->initCallback;
 
-        if (is_callable($callback)) {
+        if (\is_callable($callback)) {
             $result = $callback();
 
-            if (is_array($result)) {
+            if (\is_array($result)) {
                 $this->state = $result;
 
                 return;
@@ -251,18 +268,22 @@ final class Query implements ProophQuery
         $this->isStopped = false;
         $this->prepareStreamPositions();
 
+        $eventStreams = [];
+
         foreach ($this->streamPositions as $streamName => $position) {
             try {
-                $streamEvents = $this->eventStore->load(new StreamName($streamName), $position + 1);
+                $eventStreams[$streamName] = $this->eventStore->load(new StreamName($streamName), $position + 1, null, $this->metadataMatcher);
             } catch (Exception\StreamNotFound $e) {
                 // ignore
                 continue;
             }
 
+            $streamEvents = new MergedStreamIterator(\array_keys($eventStreams), ...\array_values($eventStreams));
+
             if ($singleHandler) {
-                $this->handleStreamWithSingleHandler($streamName, $streamEvents);
+                $this->handleStreamWithSingleHandler($streamEvents);
             } else {
-                $this->handleStreamWithHandlers($streamName, $streamEvents);
+                $this->handleStreamWithHandlers($streamEvents);
             }
 
             if ($this->isStopped) {
@@ -271,18 +292,22 @@ final class Query implements ProophQuery
         }
     }
 
-    private function handleStreamWithSingleHandler(string $streamName, Iterator $events): void
+    private function handleStreamWithSingleHandler(MergedStreamIterator $events): void
     {
-        $this->currentStreamName = $streamName;
         $handler = $this->handler;
 
-        foreach ($events as $event) {
-            /* @var Message $event */
-            $this->streamPositions[$streamName]++;
+        /* @var Message $event */
+        foreach ($events as $key => $event) {
+            if ($this->triggerPcntlSignalDispatch) {
+                \pcntl_signal_dispatch();
+            }
+
+            $this->currentStreamName = $events->streamName();
+            $this->streamPositions[$this->currentStreamName] = $key;
 
             $result = $handler($this->state, $event);
 
-            if (is_array($result)) {
+            if (\is_array($result)) {
                 $this->state = $result;
             }
 
@@ -292,22 +317,29 @@ final class Query implements ProophQuery
         }
     }
 
-    private function handleStreamWithHandlers(string $streamName, Iterator $events): void
+    private function handleStreamWithHandlers(MergedStreamIterator $events): void
     {
-        $this->currentStreamName = $streamName;
+        /* @var Message $event */
+        foreach ($events as $key => $event) {
+            if ($this->triggerPcntlSignalDispatch) {
+                \pcntl_signal_dispatch();
+            }
 
-        foreach ($events as $event) {
-            /* @var Message $event */
-            $this->streamPositions[$streamName]++;
+            $this->currentStreamName = $events->streamName();
+            $this->streamPositions[$this->currentStreamName] = $key;
 
             if (! isset($this->handlers[$event->messageName()])) {
+                if ($this->isStopped) {
+                    break;
+                }
+
                 continue;
             }
 
             $handler = $this->handlers[$event->messageName()];
             $result = $handler($this->state, $event);
 
-            if (is_array($result)) {
+            if (\is_array($result)) {
                 $this->state = $result;
             }
 
@@ -361,31 +393,26 @@ RETURN {
 }
 EOF;
 
-            $cursor = $this->connection->query(
-                Vpack::fromArray(
+            try {
+                $cursor = $this->statementHandler->create(
+                    $aql,
                     [
-                        Statement::ENTRY_QUERY => $aql,
-                        Statement::ENTRY_BINDVARS => [
-                            '@collection' => $this->eventStreamsTable,
-                        ],
-                        Statement::ENTRY_BATCHSIZE => 1000,
-                    ]
-                ),
-                [
-                    Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
-                ]
-            );
+                        '@collection' => $this->eventStreamsTable,
+                    ],
+                    1000
+                );
 
-            $cursor->rewind();
+                $cursor->rewind();
+                while ($cursor->valid()) {
+                    $streamPositions[$cursor->current()['real_stream_name']] = 0;
+                    $cursor->next();
+                }
+                $this->streamPositions = \array_merge($streamPositions, $this->streamPositions);
 
-            while ($cursor->valid()) {
-                $streamPositions[$cursor->current()['real_stream_name']] = 0;
-                $cursor->next();
+                return;
+            } catch (ServerException $e) {
+                throw RuntimeException::fromServerException($e);
             }
-
-            $this->streamPositions = array_merge($streamPositions, $this->streamPositions);
-
-            return;
         }
 
         if (isset($this->query['categories'])) {
@@ -396,33 +423,27 @@ RETURN {
     "real_stream_name": c.real_stream_name
 }
 EOF;
-
-            $cursor = $this->connection->query(
-                Vpack::fromArray(
+            try {
+                $cursor = $this->statementHandler->create(
+                    $aql,
                     [
-                        Statement::ENTRY_QUERY => $aql,
-                        Statement::ENTRY_BINDVARS => [
-                            '@collection' => $this->eventStreamsTable,
-                            'categories' => $this->query['categories'],
-                        ],
-                        Statement::ENTRY_BATCHSIZE => 1000,
-                    ]
-                ),
-                [
-                    Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
-                ]
-            );
+                        '@collection' => $this->eventStreamsTable,
+                        'categories' => $this->query['categories'],
+                    ],
+                    1000
+                );
 
-            $cursor->rewind();
+                $cursor->rewind();
+                while ($cursor->valid()) {
+                    $streamPositions[$cursor->current()['real_stream_name']] = 0;
+                    $cursor->next();
+                }
+                $this->streamPositions = \array_merge($streamPositions, $this->streamPositions);
 
-            while ($cursor->valid()) {
-                $streamPositions[$cursor->current()['real_stream_name']] = 0;
-                $cursor->next();
+                return;
+            } catch (ServerException $e) {
+                throw RuntimeException::fromServerException($e);
             }
-
-            $this->streamPositions = array_merge($streamPositions, $this->streamPositions);
-
-            return;
         }
 
         // stream names given
@@ -430,6 +451,6 @@ EOF;
             $streamPositions[$streamName] = 0;
         }
 
-        $this->streamPositions = array_merge($streamPositions, $this->streamPositions);
+        $this->streamPositions = \array_merge($streamPositions, $this->streamPositions);
     }
 }

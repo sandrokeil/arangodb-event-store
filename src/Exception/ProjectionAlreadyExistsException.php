@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -12,7 +13,7 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb\Exception;
 
-use ArangoDb\Response;
+use ArangoDb\Http\Response;
 
 class ProjectionAlreadyExistsException extends RuntimeException
 {
@@ -28,7 +29,7 @@ class ProjectionAlreadyExistsException extends RuntimeException
 
     public static function with(string $projectionName, ?Response $response): ProjectionAlreadyExistsException
     {
-        $self = new self(sprintf('Another projection process is already running for projection "%s"', $projectionName));
+        $self = new self(\sprintf('Another projection process is already running for projection "%s"', $projectionName));
         $self->response = $response;
 
         return $self;

@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -10,17 +11,14 @@
 
 declare(strict_types=1);
 
-namespace Prooph\EventStore\ArangoDb\Type;
+namespace Prooph\EventStore\ArangoDb\Exception;
 
-use ArangoDb\Response;
-
-interface Type
+final class WrongTypeClass extends LogicException
 {
-    public function toHttp(): iterable;
-
-    public function toJs(): string;
-
-    public function collectionName(): string;
-
-    public function checkResponse(Response $response, string $rId = null): ?int;
+    public static function forType(string $type, string $fqcn)
+    {
+        return new self(
+            \sprintf('The provided class name "%s" does not implement "%s".', $fqcn, $type)
+        );
+    }
 }

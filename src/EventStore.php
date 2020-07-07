@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the prooph/arangodb-event-store.
  * (c) 2017-2018 prooph software GmbH <contact@prooph.de>
@@ -12,39 +13,36 @@ declare(strict_types=1);
 
 namespace Prooph\EventStore\ArangoDb;
 
-use ArangoDb\Connection;
-use ArangoDb\Cursor;
-use ArangoDb\RequestFailedException;
-use ArangoDb\Response;
-use ArangoDb\Vpack;
-use ArangoDBClient\Statement;
-use ArangoDBClient\Urls;
+use ArangoDb\Exception\ServerException;
+use ArangoDb\Handler\StatementHandler;
+use ArangoDb\Http\TypeSupport;
+use ArangoDb\Type\Collection;
+use ArangoDb\Type\CollectionType;
+use ArangoDb\Type\Document;
+use ArangoDb\Type\DocumentType;
 use Assert\Assertion;
+use Fig\Http\Message\StatusCodeInterface;
 use Iterator;
 use Prooph\Common\Messaging\MessageFactory;
-use Prooph\EventStore\ArangoDb\Exception\RuntimeException;
-use Prooph\EventStore\ArangoDb\Type\Type;
+use Prooph\EventStore\ArangoDb\Exception\WrongTypeClass;
 use Prooph\EventStore\EventStore as ProophEventStore;
-use Prooph\EventStore\Exception\StreamExistsAlready;
 use Prooph\EventStore\Exception\StreamNotFound;
-use Prooph\EventStore\Exception\TransactionAlreadyStarted;
-use Prooph\EventStore\Exception\TransactionNotStarted;
 use Prooph\EventStore\Metadata\FieldType;
 use Prooph\EventStore\Metadata\MetadataMatcher;
 use Prooph\EventStore\Metadata\Operator;
 use Prooph\EventStore\Stream;
 use Prooph\EventStore\StreamName;
-use Prooph\EventStore\TransactionalEventStore;
 
-final class EventStore implements ProophEventStore, TransactionalEventStore
+abstract class EventStore implements ProophEventStore
 {
     private const SORT_ASC = 'ASC';
     private const SORT_DESC = 'DESC';
 
     /**
-     * @var Connection
+     * @var TypeSupport
      */
-    private $connection;
+    protected $client;
+
     /**
      * @var MessageFactory
      */
@@ -53,7 +51,7 @@ final class EventStore implements ProophEventStore, TransactionalEventStore
     /**
      * @var PersistenceStrategy
      */
-    private $persistenceStrategy;
+    protected $persistenceStrategy;
 
     /**
      * @var int
@@ -63,220 +61,55 @@ final class EventStore implements ProophEventStore, TransactionalEventStore
     /**
      * @var string
      */
-    private $eventStreamsCollection;
+    protected $eventStreamsCollection;
 
     /**
-     * @var bool
+     * @var StatementHandler
      */
-    private $disableTransactionHandling;
-
-    /**
-     * @var bool
-     */
-    private $inTransaction = false;
-
-    /**
-     * @var array
-     */
-    private $writeCollections = [];
-
-    /**
-     * @var int
-     */
-    private $resultId = -1;
+    protected $statementHandler;
 
     /**
      * @var string
      */
-    private $actions = '';
+    protected $documentClass = Document::class;
 
     /**
-     * @var Type[]
+     * @var string
      */
-    private $nonTransactionActions = [];
-
-    private $results = [];
-
-    /**
-     * @var array
-     */
-    private $guards = [];
+    protected $collectionClass = Collection::class;
 
     public function __construct(
         MessageFactory $messageFactory,
-        Connection $connection,
+        TypeSupport $client,
+        StatementHandler $statementHandler,
         PersistenceStrategy $persistenceStrategy,
         int $loadBatchSize = 10000,
-        string $eventStreamsCollection = 'event_streams',
-        bool $disableTransactionHandling = false
+        string $eventStreamsCollection = 'event_streams'
     ) {
         Assertion::min($loadBatchSize, 1);
 
         $this->messageFactory = $messageFactory;
-        $this->connection = $connection;
+        $this->client = $client;
+        $this->statementHandler = $statementHandler;
         $this->persistenceStrategy = $persistenceStrategy;
         $this->loadBatchSize = $loadBatchSize;
         $this->eventStreamsCollection = $eventStreamsCollection;
-        $this->disableTransactionHandling = $disableTransactionHandling;
     }
 
-    public function updateStreamMetadata(StreamName $streamName, array $newMetadata): void
+    public function setDocumentTypeClass(string $fqcn): void
     {
-        $wasInTransaction = $this->inTransaction;
-        $disableTransactionHandling = $this->disableTransactionHandling;
-        $this->disableTransactionHandling = false;
-
-        if (!$wasInTransaction) {
-            $this->beginTransaction();
+        if (! \is_subclass_of($fqcn, DocumentType::class)) {
+            throw WrongTypeClass::forType(DocumentType::class, $fqcn);
         }
-        try {
-            $this->writeCollections[] = $this->eventStreamsCollection;
-
-            $this->actions .= 'var rId' . ++$this->resultId . ' = db.' . $this->eventStreamsCollection
-                . '.updateByExample('
-                . json_encode(['real_stream_name' => $streamName->toString()]) . ', '
-                . '{"metadata":' . json_encode($newMetadata) . '}, '
-                . '{"mergeObjects": false}'
-                . ');';
-            $rId = 'rId' . $this->resultId;
-            $this->results[] = $rId;
-
-            $this->guards[] = function (Response $response) use ($rId, $streamName) {
-                if (strpos($response->getBody(), '"' . $rId . '"' . ':0') !== false) {
-                    throw StreamNotFound::with($streamName);
-                }
-            };
-
-            if (!$wasInTransaction) {
-                $this->commit();
-            }
-
-            $this->disableTransactionHandling = $disableTransactionHandling;
-        } catch (RequestFailedException $e) {
-            if (!$wasInTransaction) {
-                $this->rollback();
-            }
-            $this->disableTransactionHandling = $disableTransactionHandling;
-
-            if ($e->getHttpCode() === 404) {
-                throw StreamNotFound::with($streamName);
-            }
-            throw RuntimeException::fromServerException($e);
-        }
+        $this->documentClass = $fqcn;
     }
 
-    public function create(Stream $stream): void
+    public function setCollectionTypeClass(string $fqcn): void
     {
-        $streamName = $stream->streamName();
-        $collectionName = $this->persistenceStrategy->generateCollectionName($streamName);
-
-        if (!$this->inTransaction && !$this->disableTransactionHandling) {
-            try {
-                /* @var $type Type */
-                foreach ($this->persistenceStrategy->createCollection($collectionName) as $type) {
-                    $item = $type->toHttp();
-                    $this->connection->{$item[0]}(
-                        $item[1],
-                        Vpack::fromArray($item[2]),
-                        $item[3]
-                    );
-                }
-                $this->connection->post(
-                    Urls::URL_DOCUMENT . '/' .  $this->eventStreamsCollection,
-                    Vpack::fromArray($this->createEventStreamData($stream)),
-                    ['silent' => true]
-                );
-                $this->appendTo($streamName, $stream->streamEvents());
-            } catch (RequestFailedException $e) {
-                if ($e->getHttpCode() === 409) {
-                    throw StreamExistsAlready::with($streamName);
-                }
-                throw RuntimeException::fromServerException($e);
-            }
-            return;
+        if (! \is_subclass_of($fqcn, CollectionType::class)) {
+            throw WrongTypeClass::forType(CollectionType::class, $fqcn);
         }
-
-        /* @var $type Type */
-        foreach ($this->persistenceStrategy->createCollection($collectionName) as $type) {
-            $this->nonTransactionActions[] = $type;
-        }
-
-        $this->actions = 'var rId' . ++$this->resultId . ' = db.' . $this->eventStreamsCollection
-            . '.insert(' . json_encode([$this->createEventStreamData($stream)])
-            . ', {"silent":true});';
-
-        $this->results[] = 'rId' . $this->resultId;
-        $this->writeCollections[] = $this->eventStreamsCollection;
-
-        $this->appendTo($streamName, $stream->streamEvents());
-    }
-
-    public function appendTo(StreamName $streamName, Iterator $streamEvents): void
-    {
-        $collectionName = $this->persistenceStrategy->generateCollectionName($streamName);
-
-        if (!$this->inTransaction && !$this->disableTransactionHandling) {
-            $data = $this->persistenceStrategy->prepareData($streamEvents);
-
-            if (empty($data)) {
-                return;
-            }
-
-            try {
-                $this->connection->post(
-                    Urls::URL_DOCUMENT . '/' . $collectionName,
-                    Vpack::fromArray($data),
-                    ['silent' => true]
-                );
-            } catch (RequestFailedException $e) {
-                if ($e->getHttpCode() === 404) {
-                    throw StreamNotFound::with($streamName);
-                }
-                throw RuntimeException::fromServerException($e);
-            }
-            return;
-        }
-
-        $data = $this->persistenceStrategy->jsonIterator($streamEvents)->asJson();
-
-        if (\strlen($data) < 4) {
-            return;
-        }
-
-        $this->writeCollections[] = $collectionName;
-        $this->actions .= 'var rId' . ++$this->resultId . ' = db.' . $collectionName
-            . '.insert(' . $data
-            . ', {"silent":true});';
-        $this->results[] = 'rId' . $this->resultId;
-    }
-
-    public function delete(StreamName $streamName): void
-    {
-        try {
-            $this->connection->delete(
-                Urls::URL_COLLECTION . '/' . $this->persistenceStrategy->generateCollectionName($streamName)
-            );
-
-            $response = $this->connection->put(
-                Urls::URL_REMOVE_BY_EXAMPLE,
-                Vpack::fromArray(
-                    [
-                        'collection' => $this->eventStreamsCollection,
-                        'example' => ['real_stream_name' => $streamName->toString()],
-                    ]
-                )
-            );
-
-            if (strpos($response->getBody(), '"deleted":0') !== false) {
-                throw StreamNotFound::with($streamName);
-            }
-
-        } catch (RequestFailedException $e) {
-            if ($e->getHttpCode() === 404) {
-                throw StreamNotFound::with($streamName);
-            }
-            throw RuntimeException::fromServerException($e);
-        }
+        $this->collectionClass = $fqcn;
     }
 
     public function load(
@@ -310,17 +143,13 @@ final class EventStore implements ProophEventStore, TransactionalEventStore
 
         [$where, $values] = $this->createWhereClause($metadataMatcher);
 
-        $filter = implode(' AND ', $where);
+        $filter = \implode(' AND ', $where);
 
-        if (count($where)) {
+        if (\count($where)) {
             $filter = ' AND ' . $filter;
         }
 
-        if (null === $count) {
-            $limit = $this->loadBatchSize;
-        } else {
-            $limit = min($count, $this->loadBatchSize);
-        }
+        $limit = $count ?? $this->loadBatchSize;
 
         $aql = <<<'EOF'
 FOR c IN  @@collection
@@ -338,39 +167,34 @@ RETURN {
 EOF;
         $collectionName = $this->persistenceStrategy->generateCollectionName($streamName);
 
-        $cursor = $this->connection->query(
-            Vpack::fromArray(
-                [
-                    Statement::ENTRY_QUERY => str_replace(
-                        ['%DIR%', '%op%', '%filter%'],
-                        [$dir, $dir === self::SORT_ASC ? '>=' : '<=', $filter],
-                        $aql
-                    ),
-                    Statement::ENTRY_BINDVARS => array_merge(
-                        [
-                            '@collection' => $collectionName,
-                            'from' => (string)$fromNumber,
-                            'limit' => $limit,
-                        ],
-                        $values),
-                    Statement::ENTRY_BATCHSIZE => 1000,
-                ]
-            ),
-            [
-                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_JSON,
-            ]
-        );
-
         try {
+            $cursor = $this->statementHandler->create(
+                \str_replace(
+                    ['%DIR%', '%op%', '%filter%'],
+                    [$dir, $dir === self::SORT_ASC ? '>=' : '<=', $filter],
+                    $aql
+                ),
+                \array_merge(
+                    [
+                        '@collection' => $collectionName,
+                        'from' => (string) $fromNumber,
+                        'limit' => $limit,
+                    ],
+                    $values
+                ),
+                $this->loadBatchSize
+            );
+
             return new StreamIterator(
                 $cursor,
                 $this->persistenceStrategy->offsetNumber(),
                 $this->messageFactory
             );
-        } catch (\Throwable $e) {
-            if ($cursor->getResponse()->getHttpCode() === 404) {
+        } catch (ServerException $e) {
+            if ($e->getCode() === StatusCodeInterface::STATUS_NOT_FOUND) {
                 throw StreamNotFound::with($streamName);
             }
+
             throw $e;
         }
     }
@@ -399,11 +223,11 @@ EOF;
         ?MetadataMatcher $metadataMatcher,
         int $limit = 20,
         int $offset = 0
-    ) {
+    ): array {
         [$where, $values] = $this->createWhereClause($metadataMatcher);
 
         if ($isRegex) {
-            if (empty($filter) || false === @preg_match("/$filter/", '')) {
+            if (empty($filter) || false === @\preg_match("/$filter/", '')) {
                 throw new Exception\InvalidArgumentException('Invalid regex pattern given');
             }
             $where[] = 'c.real_stream_name =~ @name';
@@ -413,7 +237,7 @@ EOF;
             $values['name'] = $filter;
         }
 
-        $filter = implode(' AND ', $where);
+        $filter = \implode(' AND ', $where);
 
         if (! empty($filter)) {
             $filter = 'FILTER ' . $filter;
@@ -429,24 +253,16 @@ RETURN {
 }
 EOF;
 
-        $cursor = $this->connection->query(
-            Vpack::fromArray(
+        $cursor = $this->statementHandler->create(
+            \str_replace('%filter%', $filter, $aql),
+            \array_merge(
                 [
-                    Statement::ENTRY_QUERY => str_replace('%filter%', $filter, $aql),
-                    Statement::ENTRY_BINDVARS => array_merge(
-                        [
-                            '@collection' => $this->eventStreamsCollection,
-                            'offset' => $offset,
-                            'limit' => $limit,
-                        ],
-                        $values
-                    ),
-                    Statement::ENTRY_BATCHSIZE => 1000,
-                ]
-            ),
-            [
-                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
-            ]
+                    '@collection' => $this->eventStreamsCollection,
+                    'offset' => $offset,
+                    'limit' => $limit,
+                ],
+                $values
+            )
         );
 
         $streamNames = [];
@@ -478,7 +294,7 @@ EOF;
     ) {
         $values = [];
         if ($isRegex) {
-            if (empty($filter) || false === @preg_match("/$filter/", '')) {
+            if (empty($filter) || false === @\preg_match("/$filter/", '')) {
                 throw new Exception\InvalidArgumentException('Invalid regex pattern given');
             }
             $where[] = 'c.real_stream_name =~ @name';
@@ -490,7 +306,7 @@ EOF;
             $where[] = 'c.category != null';
         }
 
-        $filter = implode(' AND ', $where);
+        $filter = \implode(' AND ', $where);
 
         if (! empty($filter)) {
             $filter = 'FILTER ' . $filter;
@@ -509,24 +325,16 @@ RETURN {
 EOF;
         $categories = [];
 
-        $cursor = $this->connection->query(
-            Vpack::fromArray(
+        $cursor = $this->statementHandler->create(
+            \str_replace('%filter%', $filter, $aql),
+            \array_merge(
                 [
-                    Statement::ENTRY_QUERY => str_replace('%filter%', $filter, $aql),
-                    Statement::ENTRY_BINDVARS => array_merge(
-                        [
-                            '@collection' => $this->eventStreamsCollection,
-                            'offset' => $offset,
-                            'limit' => $limit,
-                        ],
-                        $values
-                    ),
-                    Statement::ENTRY_BATCHSIZE => 1000,
-                ]
-            ),
-            [
-                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
-            ]
+                    '@collection' => $this->eventStreamsCollection,
+                    'offset' => $offset,
+                    'limit' => $limit,
+                ],
+                $values
+            )
         );
         $cursor->rewind();
 
@@ -547,28 +355,20 @@ FOR c IN @@collection
         metadata: c.metadata
     }
 EOF;
-
-        $cursor = $this->connection->query(
-            Vpack::fromArray(
-                [
-                    Statement::ENTRY_QUERY => $aql,
-                    Statement::ENTRY_BINDVARS => [
-                        '@collection' => $this->eventStreamsCollection,
-                        'real_stream_name' => $streamName->toString(),
-                    ],
-                ]
-            ),
+        $cursor = $this->statementHandler->create(
+            $aql,
             [
-                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
+                '@collection' => $this->eventStreamsCollection,
+                'real_stream_name' => $streamName->toString(),
             ]
         );
-
         $cursor->rewind();
+
         if (false === $cursor->valid() || ($stream = $cursor->current()) === null) {
             throw StreamNotFound::with($streamName);
         }
 
-        return $cursor->current()['metadata'];
+        return $stream['metadata'];
     }
 
     public function hasStream(StreamName $streamName): bool
@@ -581,19 +381,11 @@ FOR c IN @@collection
         number: number
     }
 EOF;
-
-        $cursor = $this->connection->query(
-            Vpack::fromArray(
-                [
-                    Statement::ENTRY_QUERY => $aql,
-                    Statement::ENTRY_BINDVARS => [
-                        '@collection' => $this->eventStreamsCollection,
-                        'real_stream_name' => $streamName->toString(),
-                    ],
-                ]
-            ),
+        $cursor = $this->statementHandler->create(
+            $aql,
             [
-                Cursor::ENTRY_TYPE => Cursor::ENTRY_TYPE_ARRAY,
+                '@collection' => $this->eventStreamsCollection,
+                'real_stream_name' => $streamName->toString(),
             ]
         );
         $cursor->rewind();
@@ -601,22 +393,23 @@ EOF;
         return 1 === ($cursor->current()['number'] ?? 0);
     }
 
-    private function createEventStreamData(Stream $stream): array
+    protected function createEventStreamData(Stream $stream): array
     {
         $realStreamName = $stream->streamName()->toString();
 
-        $pos = strpos($realStreamName, '-');
+        $pos = \strpos($realStreamName, '-');
 
         $category = null;
 
         if (false !== $pos && $pos > 0) {
-            $category = substr($realStreamName, 0, $pos);
+            $category = \substr($realStreamName, 0, $pos);
         }
 
         $streamName = $this->persistenceStrategy->generateCollectionName($stream->streamName());
         $metadata = $stream->metadata();
 
         return [
+            '_key' => $streamName,
             'real_stream_name' => $realStreamName,
             'stream_name' => $streamName,
             'metadata' => $metadata,
@@ -645,7 +438,7 @@ EOF;
             $value = $match['value'];
             $parameters = [];
 
-            if (is_array($value)) {
+            if (\is_array($value)) {
                 foreach ($value as $k => $v) {
                     $parameters[] = '@metadata_' . $key . '_' . $k;
                 }
@@ -653,7 +446,7 @@ EOF;
                 $parameters = ['@metadata_' . $key];
             }
 
-            $parameterString = implode(', ', $parameters);
+            $parameterString = \implode(', ', $parameters);
             $operatorStringEnd = '';
 
             switch ($operator) {
@@ -701,7 +494,7 @@ EOF;
             $value = (array) $value;
 
             foreach ($value as $k => $v) {
-                $values[substr($parameters[$k], 1)] = $v;
+                $values[\substr($parameters[$k], 1)] = $v;
             }
         }
 
@@ -709,106 +502,5 @@ EOF;
             $where,
             $values,
         ];
-    }
-
-    public function beginTransaction(): void
-    {
-        if ($this->disableTransactionHandling) {
-            return;
-        }
-
-        if ($this->inTransaction) {
-            throw new TransactionAlreadyStarted();
-        }
-        $this->inTransaction = true;
-    }
-
-    public function commit(): void
-    {
-        if ($this->disableTransactionHandling) {
-            return;
-        }
-        if (!$this->inTransaction) {
-            throw new TransactionNotStarted();
-        }
-
-        try {
-            if (!empty($this->nonTransactionActions)) {
-                foreach ($this->nonTransactionActions as $type) {
-                    $item = $type->toHttp();
-                    $this->connection->{$item[0]}(
-                        $item[1],
-                        Vpack::fromArray($item[2]),
-                        $item[3]
-                    );
-                }
-            }
-
-            $response = $this->connection->post(
-                Urls::URL_TRANSACTION,
-                Vpack::fromArray(
-                        [
-                            'collections' => [
-                                'write' => array_keys(array_flip($this->writeCollections)),
-                            ],
-                            'action' => "function () {var db = require('@arangodb').db;" . $this->actions
-                                . 'return {' . implode(',', $this->results) .'}}',
-                        ]
-                ));
-            if (!empty($this->guards)) {
-                array_walk($this->guards, function($guard) use ($response) {
-                    $guard($response);
-                });
-            }
-            $this->actions = '';
-            $this->inTransaction = false;
-            $this->nonTransactionActions = [];
-            $this->results = [];
-            $this->guards = [];
-            $this->resultId = -1;
-        } catch (RequestFailedException $e) {
-            throw RuntimeException::fromServerException($e);
-        }
-    }
-
-    public function rollback(): void
-    {
-        if ($this->disableTransactionHandling) {
-            return;
-        }
-        if (!$this->inTransaction) {
-            throw new TransactionNotStarted();
-        }
-        $this->actions = '';
-        $this->inTransaction = false;
-        $this->nonTransactionActions = [];
-        $this->results = [];
-        $this->guards = [];
-        $this->resultId = -1;
-    }
-
-    public function inTransaction(): bool
-    {
-        return $this->inTransaction;
-    }
-
-    /**
-     * @throws \Exception
-     *
-     * @return mixed
-     */
-    public function transactional(callable $callable)
-    {
-        $this->beginTransaction();
-
-        try {
-            $result = $callable($this);
-            $this->commit();
-        } catch (\Throwable $e) {
-            $this->rollback();
-            throw $e;
-        }
-
-        return $result ?: true;
     }
 }
