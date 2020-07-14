@@ -1,6 +1,14 @@
 # Changelog
 
-## [0.2.0](https://github.com/sandrokeil/arangodb-event-store/tree/0.2.0)
+## [0.2.1](https://github.com/sandrokeil/arangodb-event-store/tree/0.2.1) (2020-07-14)
+
+[Full Changelog](https://github.com/sandrokeil/arangodb-event-store/compare/0.2.0...0.2.1)
+
+**Merged pull requests:**
+
+- Use MergedStreamIterator for query projector [\#11](https://github.com/sandrokeil/arangodb-event-store/pull/11) ([sandrokeil](https://github.com/sandrokeil))
+
+## [0.2.0](https://github.com/sandrokeil/arangodb-event-store/tree/0.2.0) (2020-07-08)
 
 [Full Changelog](https://github.com/sandrokeil/arangodb-event-store/compare/0.1.1...0.2.0)
 
