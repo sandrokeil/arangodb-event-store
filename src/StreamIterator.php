@@ -99,9 +99,7 @@ final class StreamIterator implements \Prooph\EventStore\StreamIterator\StreamIt
 
     public function next()
     {
-        if ($this->currentKey === -1) {
-            $this->rewind();
-        } else {
+        if ($this->currentKey !== -1) {
             $this->cursor->next();
         }
 
@@ -131,10 +129,10 @@ final class StreamIterator implements \Prooph\EventStore\StreamIterator\StreamIt
     public function rewind()
     {
         //Only perform rewind if current item is not the first element
-        if ($this->currentKey !== -1) {
+        if ($this->currentKey !== 0) {
             $this->cursor->rewind();
-            $this->currentItem = $this->cursor->current();
-            $this->currentKey = 0;
+            $this->currentKey = -1;
+            $this->next();
         }
     }
 }

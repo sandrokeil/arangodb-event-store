@@ -277,18 +277,14 @@ final class Query implements ProophQuery
                 // ignore
                 continue;
             }
+        }
 
-            $streamEvents = new MergedStreamIterator(\array_keys($eventStreams), ...\array_values($eventStreams));
+        $streamEvents = new MergedStreamIterator(\array_keys($eventStreams), ...\array_values($eventStreams));
 
-            if ($singleHandler) {
-                $this->handleStreamWithSingleHandler($streamEvents);
-            } else {
-                $this->handleStreamWithHandlers($streamEvents);
-            }
-
-            if ($this->isStopped) {
-                break;
-            }
+        if ($singleHandler) {
+            $this->handleStreamWithSingleHandler($streamEvents);
+        } else {
+            $this->handleStreamWithHandlers($streamEvents);
         }
     }
 
